@@ -15,11 +15,11 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "Programming",
+    const term_lib = b.addStaticLibrary(.{
+        .name = "term",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/term/root.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -27,15 +27,21 @@ pub fn build(b: *std.Build) void {
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
-    b.installArtifact(lib);
+    b.installArtifact(term_lib);
 
+    const term_mod = b.addModule("term", .{
+        .root_source_file = .{ .path = "src/term/root.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
     const exe = b.addExecutable(.{
         .name = "Programming",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
     });
-
+    exe.root_module.addImport("term", term_mod);
+    //exe.linkLibrary(term_lib);
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
