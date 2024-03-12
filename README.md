@@ -1,2 +1,0 @@
-# code
-fun with zig
