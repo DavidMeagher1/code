@@ -1,24 +1,72 @@
 const std = @import("std");
+const fs = std.fs;
+const mem = std.mem;
+const heap = std.heap;
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+const Dir = fs.Dir;
+const File = fs.File;
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+const FixedBufferAllocator = heap.FixedBufferAllocator;
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+const OPCode = enum(u8) {
+    // Math
+    Add = 0,
+    Sub,
+    Mul,
+    Div,
+    Inc,
+    Dec,
+    //Control Flow
+    Jmp,
+    Jmpc,
+    //Stack
+    Push,
+    Pop,
+};
 
-    try bw.flush(); // don't forget to flush!
+const Token = enum(u8) {
+    usingnamespace OPCode;
+    Label = 13,
+    SubLabel,
+    Comptime,
+};
+
+const builtin_token_map = []const []u8{
+    //Math
+    "+",  "-", "*", "/", "++", "--",
+    //Bitop
+    "&",  "|", "^",
+    //Control Flow
+    "!", "?",
+    //Stack
+     "|>",
+    "<|",
+    //Labels
+    ":", ".",
+    //Comptime
+    "@",
+};
+
+pub fn is_builtin(in: []u8, tok: Token) bool {
+    _ = in;
+    _ = tok;
 }
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+const ReadPageSize = 1024;
+
+pub fn main() !void {
+    var cwd: Dir = fs.cwd();
+    var test_file: File = try cwd.openFileZ("test.bsm", .{ .mode = .read_only });
+    defer test_file.close();
+    var file_buffer: [ReadPageSize]u8 = mem.zeroes([ReadPageSize]u8);
+    var working_buffer: [1024]u8 = mem.zeroes([1024]u8);
+
+    var fba: FixedBufferAllocator = FixedBufferAllocator.init(&working_buffer);
+    defer fba.reset();
+
+    var reader = test_file.reader();
+
+    const read: usize = try reader.read(&file_buffer);
+
+    std.debug.print("read {d}\n{s}\n", .{ read, &file_buffer });
 }
