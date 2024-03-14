@@ -22,6 +22,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const hex_module = b.createModule(.{ .root_source_file = .{ .path = "src/hex/root.zig" } });
+    exe.root_module.addImport("hex", hex_module);
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
