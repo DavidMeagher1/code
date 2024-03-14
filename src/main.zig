@@ -16,10 +16,15 @@ const ReadPageSize = 1024;
 //Bin to Hex as well
 
 const max_args_size: usize = 1024;
+const max_path_size: usize = 256;
 
 const hex_to_binary = "h2b";
 const binary_to_hex = "b2h";
 const output_to_file = "o";
+
+var input_file_path: ?[max_path_size]u8 = null;
+var output_file_path: ?[max_path_size]u8 = null;
+var setting_output_file_path: bool = false;
 
 fn process_long_flag(arg: []const u8) void {
     std.debug.print("long flag : {s}\n", .{arg});
@@ -27,9 +32,16 @@ fn process_long_flag(arg: []const u8) void {
 
 fn process_short_flag(arg: []const u8) void {
     std.debug.print("short flag : {s}\n", .{arg});
+    if (mem.eql(u8, arg, output_to_file)) {
+        setting_output_file_path = true;
+    }
 }
 
 fn process_arg(arg: []const u8) void {
+    if (setting_output_file_path and output_file_path == null) {
+        output_file_path = arg;
+        return;
+    }
     std.debug.print("argument : {s}\n", .{arg});
 }
 
@@ -39,8 +51,16 @@ pub fn process_arguments() !void {
     defer args_fba.reset();
     var args_iter = try process.argsWithAllocator(args_fba.allocator());
     defer args_iter.deinit();
-    //var arg_index: usize = 0;
+    var arg_index: usize = 0;
     _ = args_iter.skip();
+    const in_file_path = args_iter.next();
+    if (in_file_path) |path| {
+        const dup: [max_path_size]u8 = mem.zeroes([max_path_size]u8);
+        mem.copyForwards(u8, &dup, path);
+        input_file_path = dup;
+    } else {
+        @panic("FIXME");
+    }
     while (args_iter.next()) |arg| {
         if (arg[0] == '-') {
             if (arg[1] == '-') {
@@ -51,12 +71,15 @@ pub fn process_arguments() !void {
             continue;
         }
         process_arg(arg);
-        //arg_index += 1;
+        arg_index += 1;
     }
 }
 
 pub fn main() !void {
     try process_arguments();
+    if (input_file_path) |path| {
+        std.debug.print("input file path {s}\n", .{path});
+    }
     // var cwd: Dir = fs.cwd();
     // var test_file: File = try cwd.openFileZ("test.bsm", .{ .mode = .read_only });
     // defer test_file.close();
