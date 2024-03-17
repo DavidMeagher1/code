@@ -8,7 +8,7 @@ pub fn marshall_nibble(hex_val: u4) u8 {
 }
 
 pub fn marshall_byte(hex_val: u8) [2]u8 {
-    const upper_nibble: u4 = @intCast(@shrExact(hex_val & @shlExact(15, 4), 4));
+    const upper_nibble: u4 = @intCast(@shrExact(hex_val & 240, 4));
     const lower_nibble: u4 = @intCast(hex_val & 15);
     return .{ constants.digits[upper_nibble], constants.digits[lower_nibble] };
 }

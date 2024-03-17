@@ -30,6 +30,14 @@ pub fn is_lowercase(char: u8) bool {
     return false;
 }
 
+pub fn to_uppercase(char: u8) u8 {
+    if (is_lowercase(char)) {
+        return char - constants.lowercase_distance;
+    } else {
+        return char;
+    }
+}
+
 pub fn reify_hex_char(comptime T: type, char: u8) ReifyError!T {
     var working_char: u8 = char;
     if (is_hex(working_char)) {
@@ -42,6 +50,28 @@ pub fn reify_hex_char(comptime T: type, char: u8) ReifyError!T {
         }
     }
     return ReifyError.NotHex;
+}
+
+pub fn to_bytes(hex_characters: []const u8, output_buffer: []u8) ReifyError!usize {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (i < hex_characters.len) {
+        output_buffer[j] = try to_byte([2]u8{ hex_characters[i], hex_characters[i + 1] });
+        j += 1;
+        i += 2;
+    }
+    return j;
+}
+
+pub fn to_byte(hex_characters: [2]u8) ReifyError!u8 {
+    const idxa: ?usize = std.mem.indexOf(u8, &constants.digits, &[1]u8{to_uppercase(hex_characters[0])});
+    const idxb: ?usize = std.mem.indexOf(u8, &constants.digits, &[1]u8{to_uppercase(hex_characters[1])});
+    if (idxa) |a| {
+        if (idxb) |b| {
+            return @as(u8, @intCast((@shlExact(a, 4) | b)));
+        }
+    }
+    return error.NotHex;
 }
 
 pub fn reify_hex(comptime T: type, chars: []const u8) ReifyError!T {
