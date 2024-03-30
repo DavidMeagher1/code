@@ -1,24 +1,57 @@
 const std = @import("std");
+const mem = std.mem;
+const FixedBufferAllocator = std.heap.FixedBufferAllocator;
+
+const bytecode = @import("./bytecode.zig");
+const ExecutionContext = @import("./execution_context.zig");
+const hex = @import("hex");
+const Stack = @import("./stack.zig");
+const OpCode = @import("./opcodes.zig").OpCode;
+
+const memory_size: usize = 1024;
+var memory_buffer: [memory_size]u8 = mem.zeroes([memory_size]u8);
+var fixed_buffer_allocator: FixedBufferAllocator = FixedBufferAllocator.init(&memory_buffer);
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    // const code: []const u8 = &[_]u8{
+    //     @intFromEnum(OpCode.Push),
+    //     0, //  <-- Counter
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    //     //Dup Counter
+    //     @intFromEnum(OpCode.Push),
+    //     0,
+    //     @intFromEnum(OpCode.DupAt),
+    //     // Increment Counter
+    //     @intFromEnum(OpCode.Push),
+    //     1,
+    //     @intFromEnum(OpCode.Add),
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    //     @intFromEnum(OpCode.Push),
+    //     0,
+    //     @intFromEnum(OpCode.SetAt),
 
-    try bw.flush(); // don't forget to flush!
-}
+    //     // Check Counter
+    //     @intFromEnum(OpCode.Push),
+    //     50,
+    //     @intFromEnum(OpCode.Push),
+    //     0,
+    //     @intFromEnum(OpCode.DupAt),
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+    //     @intFromEnum(OpCode.Equ),
+    //     // jump to code pos 2
+    //     @intFromEnum(OpCode.Push),
+    //     23,
+    //     @intFromEnum(OpCode.CJump),
+    //     @intFromEnum(OpCode.Push),
+    //     2,
+    //     @intFromEnum(OpCode.Jump),
+    //     @intFromEnum(OpCode.Push),
+    //     177,
+    // };
+    var context: ExecutionContext = try ExecutionContext.init(fixed_buffer_allocator.allocator(), 8, 8);
+    defer context.deinit();
+
+    //context.code = bytecode.ByteCode{ .buffer };
+    try context.execute();
+    std.debug.print("\n\nWorkingStack:  {any}\n\n", .{context.working_stack});
 }

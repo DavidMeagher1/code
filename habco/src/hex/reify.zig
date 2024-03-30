@@ -38,7 +38,7 @@ pub fn to_uppercase(char: u8) u8 {
     }
 }
 
-pub fn reify_hex_char(comptime T: type, char: u8) ReifyError!T {
+pub fn reify_char(comptime T: type, char: u8) ReifyError!T {
     var working_char: u8 = char;
     if (is_hex(working_char)) {
         if (is_lowercase(char)) {
@@ -74,7 +74,7 @@ pub fn to_byte(hex_characters: [2]u8) ReifyError!u8 {
     return error.NotHex;
 }
 
-pub fn reify_hex(comptime T: type, chars: []const u8) ReifyError!T {
+pub fn reify(comptime T: type, chars: []const u8) ReifyError!T {
     const type_info: Type = @typeInfo(T);
     const signedness = type_info.Int.signedness;
     comptime var unsigned_type_info: Type = type_info;
@@ -87,7 +87,7 @@ pub fn reify_hex(comptime T: type, chars: []const u8) ReifyError!T {
     for (0..chars.len) |i| {
         const j = chars.len - 1 - i;
         const x: Unsigned = std.math.pow(Unsigned, 16, @as(Unsigned, @intCast(i)));
-        const hex_val = try reify_hex_char(Unsigned, chars[j]);
+        const hex_val = try reify_char(Unsigned, chars[j]);
         result += hex_val * x;
     }
     if (signedness == .unsigned) {
@@ -98,17 +98,17 @@ pub fn reify_hex(comptime T: type, chars: []const u8) ReifyError!T {
 }
 
 test "reify_hex_char" {
-    try testing.expectEqual(try reify_hex_char(u8, 'A'), 10);
-    try testing.expectEqual(try reify_hex_char(u8, 'a'), 10);
-    try testing.expectEqual(try reify_hex_char(u8, '3'), 3);
-    try testing.expectError(ReifyError.NotHex, reify_hex_char(u8, 'G'));
+    try testing.expectEqual(try reify_char(u8, 'A'), 10);
+    try testing.expectEqual(try reify_char(u8, 'a'), 10);
+    try testing.expectEqual(try reify_char(u8, '3'), 3);
+    try testing.expectError(ReifyError.NotHex, reify_char(u8, 'G'));
 }
 
 test "reify_hex" {
     const cs: []const u8 = "aa00";
-    const signed: i16 = try reify_hex(i16, cs);
-    const unsigned: u16 = try reify_hex(u16, cs);
+    const signed: i16 = try reify(i16, cs);
+    const unsigned: u16 = try reify(u16, cs);
     try std.testing.expectEqual(signed, -22016);
     try std.testing.expectEqual(unsigned, 43520);
-    try std.testing.expectError(ReifyError.TypeTooSmall, reify_hex(u8, cs));
+    try std.testing.expectError(ReifyError.TypeTooSmall, reify(u8, cs));
 }

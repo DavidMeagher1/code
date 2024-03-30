@@ -35,7 +35,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
+    var habco = b.dependency("habco", .{});
+    exe.root_module.addImport("hex", habco.module("hex"));
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
