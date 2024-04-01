@@ -1,0 +1,4 @@
+Usage:  compiler {input file} [options]
+
+Options:
+-o {output file}            : specifies where the compiled file should go
