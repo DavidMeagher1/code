@@ -41,6 +41,9 @@
         .habco = .{
             .path = "../habco",
         },
+        .Walli = .{
+            .path = "../Walli",
+        },
     },
 
     // Specifies the set of files and directories that are included in this package.

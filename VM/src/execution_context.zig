@@ -1,163 +1,254 @@
-const Stack = @import("./stack.zig");
-const StackIndex = Stack.StackIndex;
+const walli = @import("walli");
+const Stack = walli.stack.Stack;
+const opcodes = walli.opcodes;
+const register = walli.register;
+const memory = walli.memory;
+
 const std = @import("std");
 const mem = std.mem;
-const bytecode = @import("./bytecode.zig");
 
-const ByteCode = bytecode.ByteCode;
-const opcodes = @import("./opcodes.zig");
 const OpCode = opcodes.OpCode;
+const Register = register.Register;
+const Memory = memory.Memory;
 
-const CodeIter = mem.TokenIterator(u8, mem.DelimiterType.scalar);
+pub const ExecutionContextOptions = struct {
+    working_stack_capacity: usize = 8,
+    return_stack_capacity: usize = 8,
+    virtual_registers_count: usize = 0,
+    code_start: usize = 0,
+    memory_options: struct { data: []const u8, sections: []const memory.MemorySection },
+};
 
-const Self = @This();
+pub const ExecutionContext = struct {
+    const Self = @This();
 
-allocator: mem.Allocator,
-working_stack: Stack,
-return_stack: Stack,
-sub_contexts: ?[]Self = null,
-program_counter: usize = 0,
-code: ?ByteCode,
+    allocator: mem.Allocator,
+    working_stack: Stack,
+    return_stack: Stack,
+    register_a: Register(64) = Register(64){ .data = 0 },
+    register_b: Register(64) = Register(64){ .data = 0 },
+    virtual_registers: []Register(64),
+    sub_contexts: ?[]Self = null,
+    memory: Memory,
 
-pub fn init(allocator: mem.Allocator, working_stack_cap: usize, return_stack_cap: usize) !Self {
-    return Self{
-        .allocator = allocator,
-        .working_stack = try Stack.init(allocator, working_stack_cap),
-        .return_stack = try Stack.init(allocator, return_stack_cap),
-        .code = null,
-    };
-}
+    pub fn init(allocator: mem.Allocator, options: ExecutionContextOptions) !Self {
+        var result = Self{
+            .allocator = allocator,
+            .working_stack = try Stack.init(allocator, options.working_stack_capacity),
+            .return_stack = try Stack.init(allocator, options.return_stack_capacity),
+            .virtual_registers = try allocator.alloc(Register(64), options.virtual_registers_count),
+            .memory = try Memory.init(
+                allocator,
+                options.memory_options.data,
+                options.memory_options.sections,
+            ),
+        };
+        result.memory.pc = options.code_start;
+        return result;
+    }
 
-pub fn deinit(self: *Self) void {
-    self.return_stack.deinit();
-    self.working_stack.deinit();
-}
+    pub fn deinit(self: *Self) void {
+        self.return_stack.deinit();
+        self.working_stack.deinit();
+        self.memory.deinit();
+        self.allocator.free(self.virtual_registers);
+    }
 
-pub fn execute(self: *Self) !void {
-    if (self.code != null) {
-        var code = self.code.?;
-        while (code.next()) |byte| {
-            //defer std.debug.print("\n{any}, current op: {}\n", .{ self.working_stack.buffer[self.working_stack.top..self.working_stack.capacity], @as(OpCode, @enumFromInt(byte)) });
-
-            switch (@as(OpCode, @enumFromInt(byte))) {
+    pub fn execute(self: *Self) !void {
+        var memory_iter = memory.MemoryIterator{ .context = &self.memory };
+        while (memory_iter.next(1)) |byte| {
+            std.debug.print("\n{any}\n{}\n", .{ self.working_stack, @as(OpCode, @enumFromInt(byte[0])) });
+            //switching to a 64 bit system
+            switch (@as(OpCode, @enumFromInt(byte[0]))) {
                 OpCode.Add => {
-                    const stack_val_a = try self.working_stack.popByte();
-                    const stack_val_b = try self.working_stack.popByte();
-                    _ = try self.working_stack.pushByte(stack_val_a + stack_val_b);
+                    const data_width = memory_iter.next(1).?[0]; //how many bytes
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_a.innerRef().* = self.register_a.inner() + self.register_b.inner();
+                    _ = try self.working_stack.pushBytes(mem.asBytes(self.register_a.innerRef())[0..data_width]);
                 },
                 OpCode.Sub => {
-                    const stack_val_a = try self.working_stack.popByte();
-                    const stack_val_b = try self.working_stack.popByte();
-                    _ = try self.working_stack.pushByte(stack_val_a - stack_val_b);
+                    const data_width = memory_iter.next(1).?[0]; //how many bytes
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_a.innerRef().* = self.register_a.inner() - self.register_b.inner();
+                    _ = try self.working_stack.pushBytes(mem.asBytes(self.register_a.innerRef())[0..data_width]);
                 },
                 OpCode.Mul => {
-                    const stack_val_a = try self.working_stack.popByte();
-                    const stack_val_b = try self.working_stack.popByte();
-                    _ = try self.working_stack.pushByte(stack_val_a * stack_val_b);
+                    const data_width = memory_iter.next(1).?[0]; //how many bytes
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_a.innerRef().* = self.register_a.inner() * self.register_b.inner();
+                    _ = try self.working_stack.pushBytes(mem.asBytes(self.register_a.innerRef())[0..data_width]);
                 },
                 OpCode.Div => {
-                    const stack_val_a = try self.working_stack.popByte();
-                    const stack_val_b = try self.working_stack.popByte();
-                    _ = try self.working_stack.pushByte(stack_val_a / stack_val_b);
+                    const data_width = memory_iter.next(1).?[0]; //how many bytes
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_a.innerRef().* = self.register_a.inner() / self.register_b.inner();
+                    _ = try self.working_stack.pushBytes(mem.asBytes(self.register_a.innerRef())[0..data_width]);
                 },
                 OpCode.Push => {
-                    const im_val = code.next().?;
-                    _ = try self.working_stack.pushByte(im_val);
+                    const data_width = memory_iter.next(1).?[0];
+                    self.register_a.assignFromBytes(memory_iter.next(data_width).?);
+                    _ = try self.working_stack.pushBytes(mem.asBytes(self.register_a.innerRef())[0..data_width]);
                 },
-                OpCode.PushR => {
-                    const im_val = code.next().?;
-                    _ = try self.return_stack.pushByte(im_val);
+                OpCode.Stash => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const rs_val = try self.working_stack.popBytes(data_width);
+                    _ = try self.return_stack.pushBytes(rs_val);
+                },
+                OpCode.StoreNear => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const near = try self.working_stack.pop(u16); // actually signed
+                    const data = try self.working_stack.popBytes(data_width);
+                    const cpc = self.memory.pc;
+                    self.memory.pc += near - 1;
+                    _ = try self.memory.write(data);
+                    self.memory.pc = cpc;
+                },
+                OpCode.StoreFar => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const addr = try self.working_stack.pop(usize);
+                    const data = try self.working_stack.popBytes(data_width);
+                    const cpc = self.memory.pc;
+                    self.memory.pc = addr;
+                    _ = try self.memory.write(data);
+                    self.memory.pc = cpc;
                 },
                 OpCode.Pop => {
-                    _ = try self.working_stack.popByte();
+                    const data_width = memory_iter.next(1).?[0];
+                    _ = try self.working_stack.popBytes(data_width);
                 },
-                OpCode.PopR => {
-                    _ = try self.working_stack.popByte();
+                OpCode.Nab => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const rs_val = try self.return_stack.popBytes(data_width);
+                    _ = try self.working_stack.pushBytes(rs_val);
                 },
-                OpCode.MoveD => {
-                    const rs_val = try self.return_stack.popByte();
-                    _ = try self.working_stack.pushByte(rs_val);
+                OpCode.LoadNear => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const near = try self.working_stack.pop(u16); // actually signed
+                    try self.working_stack.reserve(data_width);
+                    const cpc = self.memory.pc;
+                    self.memory.pc += near - 1;
+                    _ = try self.memory.read(self.working_stack.buffer[self.working_stack.top .. self.working_stack.top + data_width]);
+                    self.memory.pc = cpc;
                 },
-                OpCode.MoveR => {
-                    const rs_val = try self.working_stack.popByte();
-                    _ = try self.return_stack.pushByte(rs_val);
+                OpCode.LoadFar => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const addr = try self.working_stack.pop(usize);
+                    try self.working_stack.reserve(data_width);
+                    const cpc = self.memory.pc;
+                    self.memory.pc = addr;
+                    _ = try self.memory.read(self.working_stack.buffer[self.working_stack.top .. self.working_stack.top + data_width]);
+                    self.memory.pc = cpc;
                 },
-                OpCode.SetAt => {
-                    const pos = @as(i8, @bitCast(try self.working_stack.popByte()));
-                    const val = try self.working_stack.popByte();
-                    const s_index = StackIndex.from(@as(isize, pos));
-                    const stack_val = try self.working_stack.refByteAt(s_index);
-                    stack_val[0] = val;
+                OpCode.SetNear => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const pos = try self.working_stack.pop(i16);
+                    const val = try self.working_stack.popBytes(data_width);
+                    const stack_val = self.working_stack.peekBytesNear(pos, data_width).?;
+                    @memcpy(stack_val, val);
+                },
+                OpCode.SetFar => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const pos = try self.working_stack.pop(usize);
+                    const val = try self.working_stack.popBytes(data_width);
+                    const stack_val = self.working_stack.peekBytesFar(pos, data_width).?;
+                    @memcpy(stack_val, val);
                 },
                 OpCode.Dup => {
-                    const stack_val = try self.working_stack.refByte();
-                    _ = try self.working_stack.pushByte(stack_val[0]);
+                    const data_width = memory_iter.next(1).?[0];
+                    const stack_val = self.working_stack.peekBytes(data_width).?;
+                    _ = try self.working_stack.pushBytes(stack_val);
                 },
-                OpCode.DupAt => {
-                    const pos = @as(i8, @bitCast(try self.working_stack.popByte()));
-                    std.debug.print("\n{d}\n", .{pos});
-                    const s_index = StackIndex.from(@as(isize, pos));
-                    const stack_val = try self.working_stack.refByteAt(s_index);
-                    _ = try self.working_stack.pushByte(stack_val[0]);
+                OpCode.DupNear => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const pos = try self.working_stack.pop(i16);
+                    const stack_val = self.working_stack.peekBytesNear(pos, data_width).?;
+                    _ = try self.working_stack.pushBytes(stack_val);
+                },
+                OpCode.DupFar => {
+                    const data_width = memory_iter.next(1).?[0];
+                    const pos = try self.working_stack.pop(usize);
+                    const stack_val = self.working_stack.peekBytesFar(pos, data_width).?;
+                    _ = try self.working_stack.pushBytes(stack_val);
                 },
                 OpCode.Swap => {
-                    _ = try self.working_stack.swapByte();
+                    const data_width = memory_iter.next(1).?[0];
+                    _ = try self.working_stack.swapBytes(data_width);
                 },
                 OpCode.Rot => {
-                    _ = try self.working_stack.rotateByte();
+                    const data_width = memory_iter.next(1).?[0];
+                    _ = try self.working_stack.rotateBytes(data_width);
                 },
                 OpCode.Equ => {
-                    const a = try self.working_stack.popByte();
-                    const b = try self.working_stack.popByte();
-                    if (a == b) {
-                        _ = try self.working_stack.pushByte(1);
+                    const data_width = memory_iter.next(1).?[0];
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    if (self.register_a.inner() == self.register_b.inner()) {
+                        _ = try self.working_stack.push(u8, 1);
                     } else {
-                        _ = try self.working_stack.pushByte(0);
+                        _ = try self.working_stack.push(u8, 0);
                     }
                 },
                 OpCode.NEqu => {
-                    const a = try self.working_stack.popByte();
-                    const b = try self.working_stack.popByte();
-                    if (a != b) {
-                        _ = try self.working_stack.pushByte(1);
+                    const data_width = memory_iter.next(1).?[0];
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    if (self.register_a.inner() != self.register_b.inner()) {
+                        _ = try self.working_stack.push(u8, 1);
                     } else {
-                        _ = try self.working_stack.pushByte(0);
+                        _ = try self.working_stack.push(u8, 0);
                     }
                 },
                 OpCode.LThn => {
-                    const a = try self.working_stack.popByte();
-                    const b = try self.working_stack.popByte();
-                    if (a < b) {
-                        _ = try self.working_stack.pushByte(1);
+                    const data_width = memory_iter.next(1).?[0];
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    if (self.register_a.inner() < self.register_b.inner()) {
+                        _ = try self.working_stack.push(u8, 1);
                     } else {
-                        _ = try self.working_stack.pushByte(0);
+                        _ = try self.working_stack.push(u8, 0);
                     }
                 },
                 OpCode.GThn => {
-                    const a = try self.working_stack.popByte();
-                    const b = try self.working_stack.popByte();
-                    if (a > b) {
-                        _ = try self.working_stack.pushByte(1);
+                    const data_width = memory_iter.next(1).?[0];
+                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
+                    if (self.register_a.inner() > self.register_b.inner()) {
+                        _ = try self.working_stack.push(u8, 1);
                     } else {
-                        _ = try self.working_stack.pushByte(0);
+                        _ = try self.working_stack.push(u8, 0);
                     }
                 },
-                OpCode.Jump => {
-                    const pos = @as(i8, @bitCast(try self.working_stack.popByte()));
-                    const c_index = if (pos < 0) code.index - @abs(pos) else @as(u8, @abs(pos));
-                    code.index = c_index;
+                OpCode.JumpNear => {
+                    const pos = try self.working_stack.pop(u16);
+                    self.memory.pc += pos;
                 },
-                OpCode.CJump => {
-                    const pos = @as(i8, @bitCast(try self.working_stack.popByte()));
+                OpCode.JumpFar => {
+                    const pos = try self.working_stack.pop(usize);
+                    std.debug.print("HERE: {d}", .{pos});
+                    self.memory.pc = pos;
+                    std.debug.print("HERE {d} :: {d}", .{ self.memory.pc, memory_iter.context.pc });
+                },
+                OpCode.CJumpNear => {
+                    const pos = try self.working_stack.pop(u16);
                     const condition = try self.working_stack.popByte();
-                    const c_index = if (pos < 0) code.index - @abs(pos) else @as(u8, @abs(pos));
                     if (condition == 1) {
-                        code.index = c_index;
+                        self.memory.pc += pos - 1;
+                    }
+                },
+                OpCode.CJumpFar => {
+                    const pos = try self.working_stack.pop(usize);
+                    const condition = try self.working_stack.popByte();
+                    if (condition == 1) {
+                        self.memory.pc = pos;
                     }
                 },
                 OpCode.Return => {
-                    const return_pos = try self.return_stack.popByte();
-                    code.index = return_pos + 1;
+                    const return_pos = try self.return_stack.pop(usize);
+                    self.memory.pc += return_pos + 1;
                 },
                 OpCode.Quit => {
                     break;
@@ -168,4 +259,4 @@ pub fn execute(self: *Self) !void {
             }
         }
     }
-}
+};
