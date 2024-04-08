@@ -3,6 +3,7 @@ const mem = std.mem;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const ExecutionContext = @import("./execution_context.zig").ExecutionContext;
+const memory = @import("./memory.zig");
 const hex = @import("hex");
 const walli = @import("walli");
 const Stack = walli.stack.Stack;
@@ -96,14 +97,14 @@ pub fn main() !void {
         .code_start = data_size,
         .memory_options = .{
             .data = data,
-            .sections = &[_]walli.memory.MemorySection{ walli.memory.MemorySection{
+            .sections = &[_]memory.MemorySection{ memory.MemorySection{
                 .start = 0,
                 .end = data_size,
-                .rules = walli.memory.MemorySectionRules{},
-            }, walli.memory.MemorySection{
+                .rules = memory.MemorySectionRules{},
+            }, memory.MemorySection{
                 .start = data_size,
                 .end = data_size + code_size,
-                .rules = walli.memory.MemorySectionRules{},
+                .rules = memory.MemorySectionRules{},
             } },
         },
     });

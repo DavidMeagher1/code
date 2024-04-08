@@ -1,8 +1,9 @@
 const walli = @import("walli");
-const Stack = walli.stack.Stack;
+const Stack = walli.stack.Stack; // might move stack here
 const opcodes = walli.opcodes;
-const register = walli.register;
-const memory = walli.memory;
+const register = @import("./register.zig");
+const memory = @import("./memory.zig");
+const data = @import("./data.zig");
 
 const std = @import("std");
 const mem = std.mem;
@@ -62,10 +63,30 @@ pub const ExecutionContext = struct {
             switch (@as(OpCode, @enumFromInt(byte[0]))) {
                 OpCode.Add => {
                     const data_width = memory_iter.next(1).?[0]; //how many bytes
-                    self.register_a.assignFromBytes(try self.working_stack.popBytes(data_width));
-                    self.register_b.assignFromBytes(try self.working_stack.popBytes(data_width));
-                    self.register_a.innerRef().* = self.register_a.inner() + self.register_b.inner();
-                    _ = try self.working_stack.pushBytes(mem.asBytes(self.register_a.innerRef())[0..data_width]);
+                    const pack_kind = @as(data.PackedSliceKinds, @enumFromInt(data.nearestPowerOfTwo(data_width)));
+                    switch (pack_kind) {
+                        .U8 => {
+                            const a = data.sliceCast(u8, try self.working_stack.popBytes(data_width));
+                            const b = data.sliceCast(u8, try self.working_stack.popBytes(data_width));
+                            _ = try self.working_stack.pushBytes(&mem.toBytes(a[0] + b[0]));
+                        },
+                        .U16 => {
+                            const a = data.sliceCast(u16, try self.working_stack.popBytes(data_width));
+                            const b = data.sliceCast(u16, try self.working_stack.popBytes(data_width));
+                            _ = try self.working_stack.pushBytes(&mem.toBytes(a[0] + b[0]));
+                        },
+                        .U32 => {
+                            const a = data.sliceCast(u32, try self.working_stack.popBytes(data_width));
+                            const b = data.sliceCast(u32, try self.working_stack.popBytes(data_width));
+                            _ = try self.working_stack.pushBytes(&mem.toBytes(a[0] + b[0]));
+                        },
+                        .U64 => {
+                            const a = data.sliceCast(u64, try self.working_stack.popBytes(data_width));
+                            const b = data.sliceCast(u64, try self.working_stack.popBytes(data_width));
+                            _ = try self.working_stack.pushBytes(&mem.toBytes(a[0] + b[0]));
+                        },
+                    }
+                    //self.register_a.innerRef().* = self.register_a.inner() + self.register_b.inner();
                 },
                 OpCode.Sub => {
                     const data_width = memory_iter.next(1).?[0]; //how many bytes
@@ -101,19 +122,19 @@ pub const ExecutionContext = struct {
                 OpCode.StoreNear => {
                     const data_width = memory_iter.next(1).?[0];
                     const near = try self.working_stack.pop(u16); // actually signed
-                    const data = try self.working_stack.popBytes(data_width);
+                    const _data = try self.working_stack.popBytes(data_width);
                     const cpc = self.memory.pc;
                     self.memory.pc += near - 1;
-                    _ = try self.memory.write(data);
+                    _ = try self.memory.write(_data);
                     self.memory.pc = cpc;
                 },
                 OpCode.StoreFar => {
                     const data_width = memory_iter.next(1).?[0];
                     const addr = try self.working_stack.pop(usize);
-                    const data = try self.working_stack.popBytes(data_width);
+                    const _data = try self.working_stack.popBytes(data_width);
                     const cpc = self.memory.pc;
                     self.memory.pc = addr;
-                    _ = try self.memory.write(data);
+                    _ = try self.memory.write(_data);
                     self.memory.pc = cpc;
                 },
                 OpCode.Pop => {
