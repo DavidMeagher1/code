@@ -58,7 +58,7 @@ fn isLessThan(comptime T: type, a: []T, b: []T) bool {
                 i -= 1;
                 continue;
             } else {
-                return smallest.ptr != a.ptr;
+                return smallest.ptr == a.ptr;
             }
         } else {
             // ---
@@ -83,7 +83,7 @@ fn isLessThanOrEqual(comptime T: type, a: []T, b: []T) bool {
                 i -= 1;
                 continue;
             } else {
-                return smallest.ptr != a.ptr;
+                return smallest.ptr == a.ptr;
             }
         } else {
             // ---
@@ -317,6 +317,7 @@ fn divWithRemainder(comptime T: type, alloc: Allocator, initial_dividend: []T, d
     var dividend = dividend_container[dividend_container_index..dividend_container.len];
     while (!isZero(T, dividend)) {
         if (isLessThan(T, divisor, dividend)) {
+            std.debug.print("\n\nhere\n\n", .{});
             // bottom less than top eg 4/2
             const quotent_digit = try divGetQuotent(T, alloc, dividend, divisor);
             quotent_container[quotent_index] = quotent_digit;
@@ -360,19 +361,18 @@ fn divWithRemainder(comptime T: type, alloc: Allocator, initial_dividend: []T, d
 }
 
 fn divGetQuotent(comptime T: type, alloc: Allocator, dividend: []T, divisor: []T) !T {
-    var quotent: T = 0;
+    var quotent: T = 1;
     var current_dividend = try alloc.alloc(T, dividend.len);
     @memcpy(current_dividend, dividend);
-    var carried: u1 = 0;
-    while (carried == 0) {
+    while (isLessThan(T, divisor, current_dividend)) {
         const subResult = try subWithOverflow(T, alloc, current_dividend, divisor);
         alloc.free(current_dividend);
         current_dividend = subResult[0];
-        carried = subResult[1];
         quotent += 1;
     }
     alloc.free(current_dividend);
-    return quotent - 1;
+    std.debug.print("\n\nQuotent: {d}\n\n", .{quotent});
+    return quotent;
 }
 
 test "division" {
