@@ -41,7 +41,7 @@ pub fn BigNumberUnmanaged(comptime T: type) type {
         const Self = @This();
         pub const BigMathError = error{
             Overflow,
-            Underflow,
+            DivideByZero,
         };
         value: []T,
 
@@ -55,6 +55,76 @@ pub fn BigNumberUnmanaged(comptime T: type) type {
 
         pub fn deinit(self: Self, allocator: mem.Allocator) void {
             allocator.free(self.value);
+        }
+
+        pub fn isZero(self: Self) bool {
+            for (self.value) |val| {
+                if (val != 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        fn sliceIsZero(slice: []T) bool {
+            for (slice) |val| {
+                if (val != 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        fn sliceIsLessThan(a: []T, b: []T) bool {
+            const largest = if (a.len < b.len) b else a;
+            const smallest = if (largest == a) b else a;
+            // if they have the same length
+            var i = largest.len - 1;
+            while (i >= 0) {
+                if (i > smallest.len and largest[i] == 0) {
+                    continue;
+                } else {
+                    return smallest == a;
+                }
+                if (a[i] != b[i]) {
+                    return a[i] < b[i];
+                }
+                i -= 1;
+            }
+            return false;
+        }
+
+        fn sliceIsLessThanOrEqual(a: []T, b: []T) bool {
+            const largest = if (a.len < b.len) b else a;
+            const smallest = if (largest == a) b else a;
+            // if they have the same length
+            var i = largest.len - 1;
+            while (i >= 0) {
+                if (i > smallest.len and largest[i] == 0) {
+                    continue;
+                } else {
+                    return smallest == a;
+                }
+                if (a[i] != b[i]) {
+                    return a[i] <= b[i];
+                }
+                i -= 1;
+            }
+            return false;
+        }
+
+        fn sliceIsEqual(a: []T, b: []T) bool {
+            if (a.len != b.len) {
+                return false;
+            }
+            var i = a.len - 1;
+            while (i >= 0) {
+                if (a[i] != b[i]) {
+                    return false;
+                }
+                i -= 1;
+            }
+            return true;
         }
 
         fn addSliceWithOverflow(a: []T, b: []T, output: []T) bool {
@@ -108,14 +178,10 @@ pub fn BigNumberUnmanaged(comptime T: type) type {
             while (i < min_len) {
                 const ax: ProductType = @intCast(a[i]);
                 const bx: ProductType = @intCast(b[i]);
-                std.debug.print("\n\nA:{d}, B:{d}", .{ ax, bx });
                 const inital_product = @mulWithOverflow(ax, bx);
-                //grab the carry bits from the intial product;
                 const inter_product: T = @truncate(inital_product[0]);
                 const with_carry = @addWithOverflow(inter_product, carry);
-                std.debug.print("\ninter_product-{d}: {b}, carry-{d}: {b}\n\n", .{ @sizeOf(@TypeOf(inter_product)), inter_product, @sizeOf(@TypeOf(carry)), carry });
                 output[i] = @truncate(with_carry[0]);
-                std.debug.print("\nA-{d}: {b}, B-{d}: {b}, A ^ B: {b}\n\n", .{ @sizeOf(@TypeOf(inital_product[0])), inital_product[0], @sizeOf(@TypeOf(inter_product)), inter_product, inital_product[0] ^ inter_product });
                 carry = @as(T, @truncate(@shrExact(inital_product[0] ^ inter_product, @sizeOf(T) * 8))) + with_carry[1];
                 i += 1;
             }
@@ -123,6 +189,19 @@ pub fn BigNumberUnmanaged(comptime T: type) type {
                 @memcpy(output[i..output.len], largest[i..output.len]);
             }
             return carry > 0;
+        }
+
+        fn divSlice(dividend: []T, inital_divisor: []T, quotent: []T) !void {
+            //take b and comare it to the digits of a;
+            // output is assumed to be the same size as the largest of the two numbers
+            if (sliceIsZero(inital_divisor)) {
+                return error.DivideByZero;
+            }
+            if (sliceIsEqual(inital_divisor, &[_]T{1})) {
+                quotent = dividend;
+            }
+            var i: usize = 0;
+            var divisor = dividend[0..i];
         }
 
         pub fn addWithOverFlow(a: Self, allocator: mem.Allocator, b: Self) !struct { Self, bool } {
@@ -159,6 +238,13 @@ pub fn BigNumberUnmanaged(comptime T: type) type {
             const inital_value = try allocator.alloc(T, @max(a.value.len, b.value.len));
             const carry = Self.mulSliceWithOverflow(a.value, b.value, inital_value);
             return .{ try Self.init(allocator, inital_value), carry };
+        }
+
+        pub fn div(a: Self, allocator: mem.Allocator, b: Self) !Self {
+            const largest = if (sliceIsLessThan(a.value, b.value)) b else a;
+            const inital_value = try allocator.alloc(T, largest.len);
+            try Self.divSlice(a.value, b.value, inital_value);
+            return try Self.init(allocator, inital_value);
         }
 
         pub fn mul(a: Self, allocator: mem.Allocator, b: Self) !Self {
@@ -220,8 +306,28 @@ test "mul" {
     defer b.deinit(alloc);
     const product = try a.mul(alloc, b);
     defer product.deinit(alloc);
-    const expected = @as(u132, 65535) * @as(u32, x);
+    const expected = @as(u32, 65535) * @as(u32, x);
     const actual = std.mem.bytesToValue(u32, product.value);
+    std.debug.print("\n\nMul: {any}. AsBits: {b}{b:0>8}, cast:{d}, expected: {b} cast:{d} \n\n", .{
+        product, product.value[1], product.value[0], actual, expected, expected,
+    });
+    try testing.expectEqual(expected, actual);
+}
+
+test "div" {
+    var fixed_heap = try BoundedArray(u8, 1024).init(1024);
+    var fba = std.heap.FixedBufferAllocator.init(fixed_heap.slice());
+    const alloc = fba.allocator();
+    const Big8 = BigNumberUnmanaged(u8);
+    const x = 3;
+    const a: Big8 = try Big8.init(alloc, &[_]u8{ 255, 255 });
+    defer a.deinit(alloc);
+    const b: Big8 = try Big8.init(alloc, &[_]u8{ x, 0 });
+    defer b.deinit(alloc);
+    const product = try a.div(alloc, b);
+    defer product.deinit(alloc);
+    const expected = @as(u16, 0xFFFF) / @as(u16, x);
+    const actual = std.mem.bytesToValue(u16, product.value);
     std.debug.print("\n\nMul: {any}. AsBits: {b}{b:0>8}, cast:{d}, expected: {b} cast:{d} \n\n", .{
         product, product.value[1], product.value[0], actual, expected, expected,
     });
