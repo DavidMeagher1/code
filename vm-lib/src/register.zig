@@ -3,15 +3,15 @@ const testing = std.testing;
 const utils = @import("./utils.zig");
 const Register = @This();
 
-const RegisterWriteError = error{
+const WriteError = error{
     CannotContainValue,
 };
 
-const RegisterReadError = error{
+const ReadError = error{
     CannotReadValue,
 };
 
-const SubRegisterError = error{
+const MaskingError = error{
     WidthError,
     OffsetError,
     OutOfBoundsError,
@@ -27,15 +27,15 @@ pub fn init(width: u8, location: []u8) Register {
     };
 }
 
-pub fn sub_register(width: u8, offset: u8, r: Register) SubRegisterError!Register {
+pub fn init_masking_register(r: Register, width: u8, offset: u8) MaskingError!Register {
     if (width >= r.width) {
-        return SubRegisterError.WidthError;
+        return MaskingError.WidthError;
     }
     if (offset >= r.width) {
-        return SubRegisterError.OffsetError;
+        return MaskingError.OffsetError;
     }
     if (width + offset > r.width) {
-        return SubRegisterError.OutOfBoundsError;
+        return MaskingError.OutOfBoundsError;
     }
     return Register{
         .width = width,
@@ -43,18 +43,18 @@ pub fn sub_register(width: u8, offset: u8, r: Register) SubRegisterError!Registe
     };
 }
 
-pub fn set(self: *Register, comptime T: type, value: T) RegisterWriteError!void {
+pub fn set(self: *Register, comptime T: type, value: T) WriteError!void {
     if (@sizeOf(T) > self.width) {
-        return RegisterWriteError.CannotContainValue;
+        return WriteError.CannotContainValue;
     }
     //convert value into bytes
     const bytes = std.mem.toBytes(value);
     @memcpy(self.location, &bytes);
 }
 
-pub fn get(self: *Register, comptime T: type) RegisterReadError!T {
+pub fn get(self: *Register, comptime T: type) ReadError!T {
     if (@sizeOf(T) > self.width) {
-        return RegisterReadError.CannotReadValue;
+        return ReadError.CannotReadValue;
     }
     //convert value into bytes
     const value: T = std.mem.bytesToValue(T, self.location[0..@sizeOf(T)]);
@@ -77,9 +77,9 @@ test "sub-register" {
     const static_block: []u8 = @constCast(&[_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
     const r0 = Register.init(10, static_block);
     try testing.expectEqualSlices(u8, static_block, r0.location);
-    const r1 = try sub_register(9, 1, r0);
+    const r1 = try r0.init_masking_register(9, 1);
     try testing.expectEqualSlices(u8, static_block[1..static_block.len], r1.location);
-    const r2 = try sub_register(3, 0, r0);
+    const r2 = try r0.init_masking_register(3, 0);
     try testing.expectEqualSlices(u8, &[_]u8{ 1, 2, 3 }, r2.location);
 }
 
@@ -94,7 +94,7 @@ test "register: manual modification" {
 test "sub-register: manual modification" {
     var block: [10]u8 = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const r0 = Register.init(10, block[0..]);
-    const r1 = try sub_register(6, 4, r0);
+    const r1 = try r0.init_masking_register(6, 4);
     try testing.expectEqualSlices(u8, &[_]u8{ 5, 6, 7, 8, 9, 10 }, r1.location);
 
     r1.location[0] = 240;
