@@ -1,7 +1,6 @@
 const std = @import("std");
 
-const ISA8Bit = enum {
-    Invalid,
+pub const ISA8Bit = enum {
     Imm,
     Load,
     Store,
