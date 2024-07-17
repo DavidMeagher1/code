@@ -1,10 +1,10 @@
 const Memory = @This();
 
-const WriteError = error{
+pub const WriteError = error{
     OutOfBounds,
 };
 
-const ReadError = error{
+pub const ReadError = error{
     OutOfBounds,
 };
 
@@ -16,14 +16,14 @@ pub fn init(data: []u8) Memory {
     };
 }
 
-pub fn write(self: *Memory, where: usize, what: []u8) WriteError!void {
+pub fn write(self: *Memory, where: usize, what: []const u8) WriteError!void {
     if (what.len == 0) {
         return;
     }
     if (where + what.len > self.data.len) {
         return WriteError.OutOfBounds;
     }
-    @memcpy(self.data[where..self], what);
+    @memcpy(self.data[where .. where + what.len], what);
 }
 
 pub fn read(self: *Memory, where: usize, amount: usize) ReadError![]u8 {
