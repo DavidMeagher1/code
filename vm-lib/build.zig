@@ -28,7 +28,11 @@ pub fn build(b: *std.Build) void {
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
     b.installArtifact(lib);
-
+    _ = b.addModule("vm-lib", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
@@ -39,7 +43,6 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
