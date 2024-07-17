@@ -18,10 +18,12 @@ const MaskingError = error{
 };
 
 pub const Invalid: Register = Register{
+    .is_masking = true,
     .width = 0,
     .value = @constCast(&[_]u8{}),
 };
 
+is_masking: bool = false,
 width: u8 = 8,
 value: []u8,
 
@@ -36,6 +38,7 @@ pub fn init_masking_register(r: Register, width: u8, offset: u8) MaskingError!Re
         return MaskingError.OutOfBoundsError;
     }
     return Register{
+        .is_masking = true,
         .width = width,
         .value = r.value[offset .. width + offset],
     };
