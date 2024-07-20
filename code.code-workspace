@@ -1,7 +1,14 @@
 {
 	"folders": [
 		{
-			"path": "."
+			"path": "vm-lib"
+		},
+		{
+			"path": "vm"
+		},
+		{
+			"path": "Tu"
 		}
-	]
+	],
+	"settings": {}
 }
