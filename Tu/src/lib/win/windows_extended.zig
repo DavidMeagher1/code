@@ -20,15 +20,10 @@ pub const WNDCLASSEXA = packed struct {
     hIconSm: ?windows.HICON = null,
 };
 
-pub const RECT = packed struct {
-    left: windows.LONG = 0,
-    top: windows.LONG = 0,
-    right: windows.LONG = 0,
-    bottom: windows.LONG = 0,
-};
-
+pub const WM_CREATE = 0x0001;
 pub const WM_CLOSE = 0x0010;
 pub const WM_QUIT = 0x0012;
+pub const WM_PAINT = 0x00F;
 pub const GWL_EXSTYLE = -20;
 pub const GWLP_HINSTANCE = -6;
 pub const GWLP_ID = -12;
@@ -49,6 +44,10 @@ pub const MSG = struct {
     pt: windows.POINT = .{ .x = 0, .y = 0 },
     lPrivate: windows.DWORD = 0,
 };
+
+pub fn MAKEINTRESOURCEA(i: windows.WORD) windows.LPSTR {
+    return @ptrFromInt(i);
+}
 
 pub extern "user32" fn GetMessageA(lpMsg: *MSG, hWnd: ?windows.HWND, wMsgFilterMin: windows.UINT, wMsgFilterMax: windows.UINT) callconv(.C) windows.BOOL;
 pub extern "user32" fn TranslateMessage(lpMsg: *MSG) callconv(.C) windows.BOOL;
@@ -75,3 +74,6 @@ pub const LR_DEFAULTSIZE = 0x00000040;
 pub const LR_SHARED = 0x00008000;
 
 pub extern "user32" fn LoadImageA(hInstance: ?windows.HINSTANCE, name: windows.LPCSTR, type: windows.UINT, cx: c_int, cy: c_int, fuLoad: windows.UINT) callconv(.C) windows.HANDLE;
+
+pub usingnamespace @import("./windows_window_styles.zig");
+pub usingnamespace @import("./windows_painting.zig");

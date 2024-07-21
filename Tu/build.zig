@@ -35,10 +35,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    b.installBinFile("./src/assets/icon.ico", "./icon.ico");
+    //b.installBinFile("./src/assets/icon.ico", "./icon.ico");
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
+    exe.addIncludePath(.{
+        .cwd_relative = "src",
+    });
+    exe.addWin32ResourceFile(.{
+        .file = .{ .cwd_relative = "src/assets/test.rc" },
+    });
     b.installArtifact(exe);
 
     // This *creates* a Run step in the build graph, to be executed when another
