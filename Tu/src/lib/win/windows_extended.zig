@@ -73,7 +73,11 @@ pub const LR_LOADFROMFILE = 0x00000010;
 pub const LR_DEFAULTSIZE = 0x00000040;
 pub const LR_SHARED = 0x00008000;
 
-pub extern "user32" fn LoadImageA(hInstance: ?windows.HINSTANCE, name: windows.LPCSTR, type: windows.UINT, cx: c_int, cy: c_int, fuLoad: windows.UINT) callconv(.C) windows.HANDLE;
+pub const IMAGE_BITMAP = 0x0;
+pub const IMAGE_ICON = 0x1;
+pub const IMAGE_CURSOR = 0x2;
+pub const IMAGE_ENHMETAFILE = 0x3;
+
+pub extern "user32" fn LoadImageA(hInstance: ?windows.HINSTANCE, name: windows.LPCSTR, type: windows.UINT, cx: c_int, cy: c_int, fuLoad: windows.UINT) callconv(.C) ?windows.HANDLE;
 
 pub usingnamespace @import("./windows_window_styles.zig");
-pub usingnamespace @import("./windows_painting.zig");

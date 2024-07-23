@@ -1,2 +1,0 @@
-#include "../res.h"
-AppIcon ICON "./src/assets/icon.ico"

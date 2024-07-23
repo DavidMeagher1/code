@@ -27,13 +27,24 @@ pub fn build(b: *std.Build) void {
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
-    b.installArtifact(lib);
-
+    //b.installArtifact(lib);
+    _ = lib;
     const exe = b.addExecutable(.{
         .name = "Tu",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+    });
+    const install_assets = b.addInstallDirectory(.{
+        .source_dir = .{
+            .src_path = .{
+                .owner = b,
+                .sub_path = "src/assets",
+            },
+        },
+        .install_dir = .bin,
+        .install_subdir = "assets",
+        .exclude_extensions = &[_][]const u8{ "aseprite", "rc" },
     });
     //b.installBinFile("./src/assets/icon.ico", "./icon.ico");
     // This declares intent for the executable to be installed into the
@@ -42,21 +53,18 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{
         .cwd_relative = "src",
     });
-    exe.addWin32ResourceFile(.{
-        .file = .{ .cwd_relative = "src/assets/test.rc" },
-    });
     b.installArtifact(exe);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
     // such a dependency.
     const run_cmd = b.addRunArtifact(exe);
-
     // By making the run step depend on the install step, it will be run from the
     // installation directory rather than directly from within the cache directory.
     // This is not necessary, however, if the application depends on other installed
     // files, this ensures they will be present and in the expected location.
     run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.step.dependOn(&install_assets.step);
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
