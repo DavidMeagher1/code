@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const StaticStringMap = std.StaticStringMap;
 const Register = @import("./register.zig");
-const instructions = @import("./instructions.zig");
+const instructions = @import("./common/instructions.zig");
 const OpCode = instructions.OpCode;
 
 const Memory = @import("./memory.zig");

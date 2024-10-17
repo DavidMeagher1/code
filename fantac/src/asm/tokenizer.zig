@@ -13,8 +13,6 @@ pub const Token = struct {
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
         .{ "register", .keyword_register },
-        .{ "mov", .keyword_mov },
-        .{ "add", .keyword_add },
         .{ "jmp", .keyword_jmp },
         .{ "jeq", .keyword_jeq },
         .{ "jlt", .keyword_jlt },
@@ -33,17 +31,80 @@ pub const Token = struct {
         identifier,
         number_literal,
         colon,
+        equal,
+        l_bracket,
+        r_bracket,
+        l_paren,
+        r_paren,
+        plus,
+        minus,
+        back_slash,
+        forward_slash,
+        mod,
+        asterisk,
+        ampersand,
+        pipe,
+        angle_bracket_l,
+        angle_bracket_r,
+        caret,
+        tilde,
+        period,
 
         //keywords
         keyword_register,
-        keyword_mov,
-        keyword_add,
         keyword_jmp,
         keyword_jeq,
         keyword_jlt,
         keyword_jgt,
         keyword_pop,
         keyword_psh,
+
+        pub fn lexeme(tag: Tag) ?[]const u8 {
+            return switch (tag) {
+                .invalid,
+                .identifier,
+                .eof,
+                .number_literal,
+                => null,
+
+                .colon => ":",
+                .equal => "=",
+                .l_bracket => "[",
+                .r_bracket => "]",
+                .l_paren => "(",
+                .r_paren => ")",
+                .plus => "+",
+                .minus => "-",
+                .back_slash => "\\",
+                .forward_slash => "/",
+                .mod => "%",
+                .asterisk => "*",
+                .ampersand => "&",
+                .pipe => "|",
+                .angle_bracket_l => "<",
+                .angle_bracket_r => ">",
+                .caret => "^",
+                .tilde => "~",
+                .period => ".",
+                .keyword_register => "register",
+                .keyword_jmp => "jmp",
+                .keyword_jeq => "jeq",
+                .keyword_jgt => "jgt",
+                .keyword_jlt => "jlt",
+                .keyword_pop => "pop",
+                .keyword_psh => "psh",
+            };
+        }
+
+        pub fn symbol(tag: Tag) []const u8 {
+            return tag.lexeme() orelse switch (tag) {
+                .invalid => "invalid token",
+                .identifier => "an identifier",
+                .number_literal => "a number literal",
+                .eof => "EOF",
+                else => unreachable,
+            };
+        }
     };
 };
 
@@ -105,6 +166,78 @@ pub const Tokenizer = struct {
                 },
                 ':' => {
                     result.tag = .colon;
+                    self.index += 1;
+                },
+                '[' => {
+                    result.tag = .l_bracket;
+                    self.index += 1;
+                },
+                ']' => {
+                    result.tag = .r_bracket;
+                    self.index += 1;
+                },
+                '(' => {
+                    result.tag = .l_paren;
+                    self.index += 1;
+                },
+                ')' => {
+                    result.tag = .r_paren;
+                    self.index += 1;
+                },
+                '<' => {
+                    result.tag = .angle_bracket_l;
+                    self.index += 1;
+                },
+                '>' => {
+                    result.tag = .angle_bracket_r;
+                    self.index += 1;
+                },
+                '+' => {
+                    result.tag = .plus;
+                    self.index += 1;
+                },
+                '-' => {
+                    result.tag = .minus;
+                    self.index += 1;
+                },
+                '*' => {
+                    result.tag = .asterisk;
+                    self.index += 1;
+                },
+                '&' => {
+                    result.tag = .ampersand;
+                    self.index += 1;
+                },
+                '^' => {
+                    result.tag = .caret;
+                    self.index += 1;
+                },
+                '%' => {
+                    result.tag = .mod;
+                    self.index += 1;
+                },
+                '\\' => {
+                    result.tag = .back_slash;
+                    self.index += 1;
+                },
+                '/' => {
+                    result.tag = .forward_slash;
+                    self.index += 1;
+                },
+                '.' => {
+                    result.tag = .period;
+                    self.index += 1;
+                },
+                '~' => {
+                    result.tag = .tilde;
+                    self.index += 1;
+                },
+                '|' => {
+                    result.tag = .pipe;
+                    self.index += 1;
+                },
+                '=' => {
+                    result.tag = .equal;
                     self.index += 1;
                 },
                 else => continue :state .invalid,
@@ -177,10 +310,10 @@ test "general ident" {
 }
 
 test "keyword_mov" {
-    const buffer: [:0]const u8 = &[_:0]u8{ ' ', ' ', ' ', 'm', 'o', 'v' };
+    const buffer: [:0]const u8 = &[_:0]u8{ ' ', ' ', ' ', '=' };
     var tokenizer = Tokenizer.init(buffer);
     const token = tokenizer.next();
-    try testing.expectEqual(.keyword_mov, token.tag);
+    try testing.expectEqual(.equal, token.tag);
 }
 
 test "number_literal" {
@@ -190,22 +323,22 @@ test "number_literal" {
     try testing.expectEqual(.number_literal, token.tag);
 }
 
-test "tokenizing small file" {
-    const buffer =
-        \\
-        \\register r1 $1
-        \\register r2 $2
-        \\mov $1234 r1
-        \\mov r1 r2
-    ;
-    var tokenizer = Tokenizer.init(buffer);
-    var token_list: [128]Token = undefined;
-    var current_token: Token = undefined;
-    var index: usize = 0;
-    while (current_token.tag != .eof) {
-        current_token = tokenizer.next();
-        token_list[index] = current_token;
-        index += 1;
-    }
-    std.debug.print("\n\n{any}\n\n", .{token_list[0..index]});
-}
+// test "tokenizing small file" {
+//     const buffer =
+//         \\
+//         \\register r1 $1
+//         \\register r2 $2
+//         \\= $1234 r1
+//         \\= r1 r2
+//     ;
+//     var tokenizer = Tokenizer.init(buffer);
+//     var token_list: [128]Token = undefined;
+//     var current_token: Token = undefined;
+//     var index: usize = 0;
+//     while (current_token.tag != .eof) {
+//         current_token = tokenizer.next();
+//         token_list[index] = current_token;
+//         index += 1;
+//     }
+//     //std.debug.print("\n\n{any}\n\n", .{token_list[0..index]});
+// }

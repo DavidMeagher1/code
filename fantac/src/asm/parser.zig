@@ -3,7 +3,7 @@ pub const Error = error{parse_error} || Allocator.Error;
 gpa: Allocator,
 source: []const u8,
 errors: std.ArrayListUnmanaged(AstError),
-token_tags: []const Token.tag,
+token_tags: []const Token.Tag,
 token_starts: []const Ast.ByteOffset,
 token_index: TokenIndex,
 nodes: Ast.NodeList,
@@ -43,6 +43,12 @@ fn addNode(p: *Parse, elem: Ast.Node) Allocator.Error!Node.Index {
 fn warnMsg(p: *Parse, msg: AstError) Allocator.Error!void {
     switch (msg.tag) {
         .expected_expression,
+        .expected_bracketed_expression,
+        .expected_colon_op,
+        .expected_instruction,
+        .expected_number_literal,
+        .expected_register_decl,
+        .expected_token,
         => if (msg.token != 0 and !p.tokensOnSameLine(msg.token - 1, msg.token)) {
             var copy = msg;
             copy.token_is_prev = true;
@@ -83,11 +89,11 @@ fn warnExpected(p: *Parse, expected_token: Token.Tag) !void {
 }
 
 fn tokensOnSameLine(p: *Parse, token1: TokenIndex, token2: TokenIndex) bool {
-    return std.mem.indexOfScalar(u8, p.source[p.token_starts[token1]..p.token_starts[token2]], '\n');
+    return std.mem.indexOfScalar(u8, p.source[p.token_starts[token1]..p.token_starts[token2]], '\n') == null;
 }
 
 pub fn parseRoot(p: *Parse) !void {
-    p.nodes.appendAssumeCapacity(.{
+    try p.nodes.append(p.gpa, .{
         .tag = .root,
         .main_token = 0,
         .data = undefined,
@@ -105,7 +111,7 @@ pub fn parseRoot(p: *Parse) !void {
     };
 }
 
-fn parseContainerMembers(p: *Parse) Allocator.Error!Members {
+fn parseContainerMembers(p: *Parse) !Members {
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
 
@@ -129,13 +135,37 @@ fn parseContainerMembers(p: *Parse) Allocator.Error!Members {
     while (true) {
         switch (p.token_tags[p.token_index]) {
             .keyword_register => {
-                const register_decl_node = try p.expectRegisterDecl();
+                const register_decl_node = try p.expectRegisterDeclRecoverable();
                 // if (field_state == .seen) {
                 //     field_state = .{ .end = register_decl_node };
                 // }
-                try p.scratch.append(p.gpa, register_decl_node);
+                if (register_decl_node != 0) {
+                    try p.scratch.append(p.gpa, register_decl_node);
+                }
             },
+            .equal, // move
+            .keyword_jmp,
+            .keyword_jeq,
+            .keyword_jlt,
+            .keyword_jgt,
+            .plus, // add
+            .keyword_pop,
+            .keyword_psh,
+            => {
+                const instruction_node = try p.expectInstructionRecoverable();
+                if (instruction_node != 0) {
+                    try p.scratch.append(p.gpa, instruction_node);
+                }
+            },
+            .colon => {
+                const colon_op_node = try p.expectColonOpRecoverable();
+                if (colon_op_node != 0) {
+                    try p.scratch.append(p.gpa, colon_op_node);
+                }
+            },
+            .eof => break,
             else => {
+
                 // switch (field_state) {
                 //     .none => field_state = .seen,
                 //     .err, .seen => {},
@@ -144,6 +174,7 @@ fn parseContainerMembers(p: *Parse) Allocator.Error!Members {
                 //         field_state = .err;
                 //     },
                 // }
+
             },
         }
     }
@@ -171,21 +202,40 @@ fn parseContainerMembers(p: *Parse) Allocator.Error!Members {
 }
 
 fn parseRegisterDecl(p: *Parse) !Node.Index {
+    _ = p.nextToken();
     const ident = try p.expectToken(.identifier);
-    const expr_node = p.expectExpr();
-    return p.addNode(.{ .tag = .decl_register, .main_token = ident, .data = .{
-        .lhs = expr_node,
+    const node = try p.addNode(.{
+        .tag = .decl_register,
+        .main_token = ident,
+        .data = .{
+            .lhs = undefined,
+            .rhs = undefined,
+        },
+    });
+    p.nodes.items(.data)[node] = .{
+        .lhs = try p.expectExpr(),
         .rhs = 0,
-    } });
+    };
+    return node;
 }
 
 fn expectRegisterDecl(p: *Parse) !Node.Index {
-    const node = p.parseRegisterDecl();
+    const node = try p.parseRegisterDecl();
     if (node == 0) {
         return p.fail(.expected_register_decl);
     } else {
         return node;
     }
+}
+
+fn expectRegisterDeclRecoverable(p: *Parse) Allocator.Error!Node.Index {
+    return p.expectRegisterDecl() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.parse_error => {
+            p.findNextContainerMember();
+            return null_node;
+        },
+    };
 }
 
 fn parseExpr(p: *Parse) Error!Node.Index {
@@ -206,6 +256,7 @@ fn parseExpr(p: *Parse) Error!Node.Index {
                 .lhs = undefined,
             },
         }),
+        .l_bracket => try p.expectBracketExpression(),
         else => null_node,
     };
 }
@@ -216,6 +267,477 @@ fn expectExpr(p: *Parse) Error!Node.Index {
         return p.fail(.expected_expression);
     } else {
         return node;
+    }
+}
+
+fn parseBracketExpression(p: *Parse) Error!Node.Index {
+    _ = p.nextToken();
+    const main_token = p.token_index;
+    return switch (p.token_tags[main_token]) {
+        .plus,
+        .minus,
+        .asterisk,
+        .ampersand,
+        .caret,
+        .mod,
+        .tilde,
+        .pipe,
+        .forward_slash,
+        .angle_bracket_l,
+        .angle_bracket_r,
+        .r_paren,
+        => {
+            const node = try p.parseOp();
+            return node;
+        },
+        .number_literal => {
+            const node = try p.addNode(.{
+                .tag = .number_literal,
+                .main_token = p.nextToken(),
+                .data = .{
+                    .rhs = undefined,
+                    .lhs = undefined,
+                },
+            });
+            _ = try p.expectToken(.r_bracket);
+            return node;
+        },
+        .identifier => {
+            const node = try p.addNode(.{
+                .tag = .identifier,
+                .main_token = p.nextToken(),
+                .data = .{
+                    .rhs = undefined,
+                    .lhs = undefined,
+                },
+            });
+            _ = try p.expectToken(.r_bracket);
+            return node;
+        },
+        .r_bracket => return p.fail(.expected_expression),
+        else => return null_node,
+    };
+}
+
+fn expectBracketExpression(p: *Parse) Error!Node.Index {
+    const node = try p.parseBracketExpression();
+    if (node == 0) {
+        return p.fail(.expected_bracketed_expression);
+    }
+    return node;
+}
+
+fn parseOp(p: *Parse) Error!Node.Index {
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
+    const State = enum {
+        start,
+        operator,
+        operand,
+        done,
+    };
+
+    const ProcessingSide = enum {
+        none,
+        left,
+        right,
+    };
+
+    var bracket_level: u32 = 1;
+    var paren_level: u32 = 0;
+    var processing_side: ProcessingSide = .none;
+    var result: Node.Index = 0;
+
+    state: switch (State.start) {
+        .start => {
+            switch (p.token_tags[p.token_index]) {
+                .l_bracket => {
+                    p.token_index += 1;
+                    if (p.token_tags[p.token_index] == .r_bracket) {
+                        p.token_index += 1;
+                        continue :state .start;
+                    } else {
+                        bracket_level += 1;
+                        continue :state .start;
+                    }
+                },
+                .r_bracket => {
+                    if (processing_side == .right or processing_side == .left) {
+                        return p.fail(.operator_expected_argument);
+                    }
+                    p.token_index += 1;
+                    bracket_level -= 1;
+                    if (bracket_level == 0) {
+                        continue :state .done;
+                    }
+                    continue :state .start;
+                },
+                .l_paren => {
+                    p.token_index += 1;
+                    if (p.token_tags[p.token_index] == .r_paren) {
+                        p.token_index += 1;
+                        continue :state .start;
+                    } else {
+                        paren_level += 1;
+                        continue :state .start;
+                    }
+                },
+                .r_paren => {
+                    p.token_index += 1;
+                    paren_level -= 1;
+                    if (paren_level < 0) {
+                        return p.fail(.unexpected_closing_paren);
+                    }
+                },
+                .plus, // 2 operand operators
+                .minus,
+                .asterisk,
+                .ampersand,
+                .caret,
+                .mod,
+                .pipe,
+                .forward_slash,
+                .angle_bracket_l,
+                .angle_bracket_r,
+                .tilde,
+                => {
+                    const node = try p.addNode(.{
+                        .tag = switch (p.token_tags[p.token_index]) {
+                            .plus => .op_add,
+                            .minus => .op_sub,
+                            .asterisk => .op_mul,
+                            .ampersand => .op_band,
+                            .caret => .op_bxor,
+                            .mod => .op_mod,
+                            .pipe => .op_bor,
+                            .forward_slash => .op_div,
+                            .angle_bracket_l => .op_shl,
+                            .angle_bracket_r => .op_shr,
+                            .tilde => .op_bnot,
+                            else => unreachable,
+                        },
+                        .main_token = p.token_index,
+                        .data = .{
+                            .lhs = 0,
+                            .rhs = 0,
+                        },
+                    });
+                    try p.scratch.append(p.gpa, node);
+                    p.token_index += 1;
+                    continue :state .operator;
+                },
+                .identifier, .number_literal => {
+                    const node = try p.addNode(.{
+                        .tag = switch (p.token_tags[p.token_index]) {
+                            .identifier => .identifier,
+                            .number_literal => .number_literal,
+                            else => unreachable,
+                        },
+                        .main_token = p.token_index,
+                        .data = .{
+                            .lhs = 0,
+                            .rhs = 0,
+                        },
+                    });
+                    try p.scratch.append(p.gpa, node);
+                    p.token_index += 1;
+                    continue :state .operand;
+                },
+                else => {
+                    //TODO might need to fail here
+                    return null_node;
+                },
+            }
+        },
+        .operator => {
+            side: switch (processing_side) {
+                .none => {
+                    processing_side = .left;
+                    continue :state .start;
+                },
+                .left => {
+                    //adding operator to left side of operator
+                    if (p.nodes.items(.data)[p.scratch.items[p.scratch.items.len - 2]].lhs != 0) {
+                        processing_side = .right;
+                        continue :side processing_side;
+                    }
+                    const scratch = p.scratch.items[scratch_top..];
+                    if (scratch.len > 1) {
+                        switch (p.token_tags[p.nodes.items(.main_token)[scratch[scratch.len - 2]]]) {
+                            .tilde => {
+                                p.nodes.items(.data)[scratch[scratch.len - 2]] = .{
+                                    .lhs = scratch[scratch.len - 1],
+                                    .rhs = 0,
+                                };
+                            },
+                            else => {
+                                p.nodes.items(.data)[scratch[scratch.len - 2]] = .{
+                                    .lhs = scratch[scratch.len - 1],
+                                    .rhs = 0,
+                                };
+                            },
+                        }
+                    }
+                    continue :state .start;
+                },
+                .right => {
+                    //adding operator to right side of operator
+                    const scratch = p.scratch.items[scratch_top..];
+                    if (scratch.len > 1) {
+                        p.nodes.items(.data)[scratch[scratch.len - 2]].rhs = scratch[scratch.len - 1];
+                    }
+                    processing_side = .none;
+                    continue :state .start;
+                },
+            }
+        },
+        .operand => {
+            side: switch (processing_side) {
+                .none => {
+                    processing_side = .left;
+                    continue :side processing_side;
+                },
+                .left => {
+                    //adding operand to left side of operator
+                    //if operator only has one param pop it off as well
+                    if (p.nodes.items(.data)[p.scratch.items[p.scratch.items.len - 2]].lhs != 0) {
+                        processing_side = .right;
+                        continue :side processing_side;
+                    }
+                    const scratch = p.scratch.items[scratch_top..];
+                    if (scratch.len > 1) {
+                        //std.debug.print("\n\nadding opand to left\n\n", .{});
+                        p.nodes.items(.data)[scratch[scratch.len - 2]] = .{
+                            .lhs = scratch[scratch.len - 1],
+                            .rhs = 0,
+                        };
+                        _ = p.scratch.pop();
+                    } else {
+                        unreachable;
+                    }
+                    switch (p.token_tags[p.nodes.items(.main_token)[p.scratch.items[p.scratch.items.len - 1]]]) {
+                        .tilde => { // one param ops
+                            result = p.scratch.items[p.scratch.items.len - 1];
+                            _ = p.scratch.pop();
+                            processing_side = .none;
+                        },
+                        else => {
+                            processing_side = .right;
+                        },
+                    }
+                    continue :state .start;
+                },
+                .right => {
+                    //adding operand to right side of operator
+                    // pop off both after this nodes only have lhs and rhs
+                    const scratch = p.scratch.items[scratch_top..];
+
+                    if (scratch.len > 1) {
+                        p.nodes.items(.data)[scratch[scratch.len - 2]].rhs = scratch[scratch.len - 1];
+                        _ = p.scratch.pop();
+                    } else {
+                        try p.warnMsg(.{
+                            .tag = .expected_closing_bracket,
+                            .is_note = true,
+                            .token = p.token_index - 1,
+                        });
+                        return error.parse_error;
+                    }
+                    if (p.scratch.items.len > 1) {
+                        result = p.scratch.items[0];
+                    }
+                    _ = p.scratch.pop();
+                    processing_side = .none;
+                    continue :state .start;
+                },
+            }
+        },
+        .done => {},
+    }
+    return result;
+}
+
+fn parseInstruction(p: *Parse) Error!Node.Index {
+    return switch (p.token_tags[p.token_index]) {
+        .equal => p.parseMove(),
+        .plus => p.parseAdd(),
+        .keyword_jmp => p.parseUnconditionalJump(),
+        .keyword_jeq,
+        .keyword_jlt,
+        .keyword_jgt,
+        => p.parseConditionalJump(),
+        else => return null_node,
+    };
+}
+
+fn parseColonOp(p: *Parse) Error!Node.Index {
+    const node = try p.addNode(.{
+        .tag = .colon_op,
+        .main_token = p.nextToken(),
+        .data = .{
+            .lhs = undefined,
+            .rhs = undefined,
+        },
+    });
+    p.nodes.items(.data)[node] = .{
+        .lhs = try p.expectExpr(),
+        .rhs = 0,
+    };
+    return node;
+}
+
+fn expectColonOp(p: *Parse) Error!Node.Index {
+    const node = try p.parseColonOp();
+    if (node == 0) {
+        return p.fail(.expected_colon_op);
+    }
+    return node;
+}
+
+fn expectColonOpRecoverable(p: *Parse) Allocator.Error!Node.Index {
+    return p.expectColonOp() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.parse_error => {
+            p.findNextContainerMember();
+            return null_node;
+        },
+    };
+}
+
+fn parseMove(p: *Parse) Error!Node.Index {
+    const main_token = p.nextToken();
+    const node = try p.addNode(.{
+        .tag = .move,
+        .main_token = main_token,
+        .data = .{
+            .lhs = undefined,
+            .rhs = undefined,
+        },
+    });
+    p.nodes.items(.data)[node] = .{
+        .lhs = try p.expectExpr(),
+        .rhs = try p.expectExpr(),
+    };
+    return node;
+}
+
+fn parseAdd(p: *Parse) Error!Node.Index {
+    const main_token = p.nextToken();
+    const node = try p.addNode(.{
+        .tag = .add,
+        .main_token = main_token,
+        .data = undefined,
+    });
+    p.nodes.items(.data)[node] = .{
+        .lhs = try p.expectExpr(),
+        .rhs = try p.expectExpr(),
+    };
+    return node;
+}
+
+fn parseUnconditionalJump(p: *Parse) Error!Node.Index {
+    const main_token = p.nextToken();
+    const lhs = try p.expectExpr();
+    return p.addNode(.{
+        .tag = .jump,
+        .main_token = main_token,
+        .data = .{
+            .lhs = lhs,
+            .rhs = 0,
+        },
+    });
+}
+
+fn parseConditionalJump(p: *Parse) Error!Node.Index {
+    const main_token = p.nextToken();
+    const lhs = try p.expectExpr();
+    const rhs = try p.expectExpr();
+    return p.addNode(.{
+        .tag = .jump,
+        .main_token = main_token,
+        .data = .{
+            .lhs = lhs,
+            .rhs = rhs,
+        },
+    });
+}
+
+fn expectInstruction(p: *Parse) Error!Node.Index {
+    const node = try p.parseInstruction();
+    if (node == 0) {
+        return p.fail(.expected_instruction);
+    } else {
+        return node;
+    }
+}
+
+fn expectInstructionRecoverable(p: *Parse) Allocator.Error!Node.Index {
+    return p.expectInstruction() catch |err| switch (err) {
+        error.OutOfMemory => return Error.OutOfMemory,
+        error.parse_error => {
+            p.findNextContainerMember();
+            return null_node;
+        },
+    };
+}
+
+fn parseNumberLit(p: *Parse) Error!Node.Index {
+    return switch (p.token_tags[p.token_index]) {
+        .number_literal => p.addNode(.{
+            .tag = .number_literal,
+            .main_token = p.nextToken(),
+            .data = .{
+                .rhs = undefined,
+                .lhs = undefined,
+            },
+        }),
+        else => null_node,
+    };
+}
+
+fn parseIdent(p: *Parse) Error!Node.Index {
+    return switch (p.token_tags[p.token_index]) {
+        .number_literal => p.addNode(.{
+            .tag = .identifier,
+            .main_token = p.nextToken(),
+            .data = .{
+                .rhs = undefined,
+                .lhs = undefined,
+            },
+        }),
+        else => null_node,
+    };
+}
+
+fn expectNumberLit(p: *Parse) Error!Node.Index {
+    const node = try p.parseNumberLit();
+    if (node == 0) {
+        return p.fail(.expected_number_literal);
+    }
+    return node;
+}
+
+fn findNextContainerMember(p: *Parse) void {
+    while (true) {
+        const tok = p.nextToken();
+        switch (p.token_tags[tok]) {
+            .keyword_jeq,
+            .keyword_jgt,
+            .keyword_jlt,
+            .keyword_jmp,
+            .plus,
+            .equal,
+            .keyword_register,
+            .keyword_pop,
+            .keyword_psh,
+            .colon,
+            .eof,
+            => {
+                p.token_index -= 1;
+                return;
+            },
+            else => {},
+        }
     }
 }
 
