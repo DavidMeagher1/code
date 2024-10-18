@@ -144,13 +144,14 @@ fn parseContainerMembers(p: *Parse) !Members {
                 }
             },
             .equal, // move
-            .keyword_jmp,
-            .keyword_jeq,
-            .keyword_jlt,
-            .keyword_jgt,
+            .bang, // jump
+            .bang_equ, // jump eq
+            .bang_angle_bracket_l, // jump lth
+            .bang_angle_bracket_r, // jump gth
             .plus, // add
-            .keyword_pop,
-            .keyword_psh,
+            .double_angle_bracket_l, // pop
+            .double_angle_bracket_r, // push
+            .minus, // sub
             => {
                 const instruction_node = try p.expectInstructionRecoverable();
                 if (instruction_node != 0) {
@@ -165,7 +166,11 @@ fn parseContainerMembers(p: *Parse) !Members {
             },
             .eof => break,
             else => {
-
+                try p.warnMsg(.{
+                    .tag = .unexpected_token,
+                    .token = p.token_index,
+                });
+                p.findNextContainerMember();
                 // switch (field_state) {
                 //     .none => field_state = .seen,
                 //     .err, .seen => {},
@@ -207,13 +212,11 @@ fn parseRegisterDecl(p: *Parse) !Node.Index {
     const node = try p.addNode(.{
         .tag = .decl_register,
         .main_token = ident,
-        .data = .{
-            .lhs = undefined,
-            .rhs = undefined,
-        },
+        .data = undefined,
     });
+    const lhs = try p.expectExpr();
     p.nodes.items(.data)[node] = .{
-        .lhs = try p.expectExpr(),
+        .lhs = lhs,
         .rhs = 0,
     };
     return node;
@@ -506,7 +509,6 @@ fn parseOp(p: *Parse) Error!Node.Index {
                     }
                     const scratch = p.scratch.items[scratch_top..];
                     if (scratch.len > 1) {
-                        //std.debug.print("\n\nadding opand to left\n\n", .{});
                         p.nodes.items(.data)[scratch[scratch.len - 2]] = .{
                             .lhs = scratch[scratch.len - 1],
                             .rhs = 0,
@@ -561,10 +563,10 @@ fn parseInstruction(p: *Parse) Error!Node.Index {
     return switch (p.token_tags[p.token_index]) {
         .equal => p.parseMove(),
         .plus => p.parseAdd(),
-        .keyword_jmp => p.parseUnconditionalJump(),
-        .keyword_jeq,
-        .keyword_jlt,
-        .keyword_jgt,
+        .bang => p.parseUnconditionalJump(),
+        .bang_equ,
+        .bang_angle_bracket_l,
+        .bang_angle_bracket_r,
         => p.parseConditionalJump(),
         else => return null_node,
     };
@@ -574,13 +576,11 @@ fn parseColonOp(p: *Parse) Error!Node.Index {
     const node = try p.addNode(.{
         .tag = .colon_op,
         .main_token = p.nextToken(),
-        .data = .{
-            .lhs = undefined,
-            .rhs = undefined,
-        },
+        .data = undefined,
     });
+    const lhs = try p.expectExpr();
     p.nodes.items(.data)[node] = .{
-        .lhs = try p.expectExpr(),
+        .lhs = lhs,
         .rhs = 0,
     };
     return node;
@@ -609,14 +609,13 @@ fn parseMove(p: *Parse) Error!Node.Index {
     const node = try p.addNode(.{
         .tag = .move,
         .main_token = main_token,
-        .data = .{
-            .lhs = undefined,
-            .rhs = undefined,
-        },
+        .data = undefined,
     });
+    const lhs = try p.expectExpr();
+    const rhs = try p.expectExpr();
     p.nodes.items(.data)[node] = .{
-        .lhs = try p.expectExpr(),
-        .rhs = try p.expectExpr(),
+        .lhs = lhs,
+        .rhs = rhs,
     };
     return node;
 }
@@ -628,38 +627,50 @@ fn parseAdd(p: *Parse) Error!Node.Index {
         .main_token = main_token,
         .data = undefined,
     });
+    const lhs = try p.expectExpr();
+    const rhs = try p.expectExpr();
     p.nodes.items(.data)[node] = .{
-        .lhs = try p.expectExpr(),
-        .rhs = try p.expectExpr(),
+        .lhs = lhs,
+        .rhs = rhs,
     };
     return node;
 }
 
 fn parseUnconditionalJump(p: *Parse) Error!Node.Index {
     const main_token = p.nextToken();
-    const lhs = try p.expectExpr();
-    return p.addNode(.{
+    //const lhs = try p.expectExpr();
+    const node = try p.addNode(.{
         .tag = .jump,
         .main_token = main_token,
-        .data = .{
-            .lhs = lhs,
-            .rhs = 0,
-        },
+        .data = undefined,
     });
+    const lhs = try p.parseExpr();
+    p.nodes.items(.data)[node] = .{
+        .lhs = lhs,
+        .rhs = 0,
+    };
+    return node;
 }
 
 fn parseConditionalJump(p: *Parse) Error!Node.Index {
     const main_token = p.nextToken();
+    const node = try p.addNode(.{
+        .tag = switch (p.token_tags[main_token]) {
+            .bang_equ => .jump_equ,
+            .bang_angle_bracket_l => .jump_lth,
+            .bang_angle_bracket_r => .jump_gth,
+            else => unreachable,
+        },
+        .main_token = main_token,
+        .data = undefined,
+    });
     const lhs = try p.expectExpr();
     const rhs = try p.expectExpr();
-    return p.addNode(.{
-        .tag = .jump,
-        .main_token = main_token,
-        .data = .{
-            .lhs = lhs,
-            .rhs = rhs,
-        },
-    });
+    p.nodes.items(.data)[node] = .{
+        .lhs = lhs,
+        .rhs = rhs,
+    };
+    return node;
 }
 
 fn expectInstruction(p: *Parse) Error!Node.Index {
@@ -721,15 +732,15 @@ fn findNextContainerMember(p: *Parse) void {
     while (true) {
         const tok = p.nextToken();
         switch (p.token_tags[tok]) {
-            .keyword_jeq,
-            .keyword_jgt,
-            .keyword_jlt,
-            .keyword_jmp,
+            .bang_equ,
+            .bang_angle_bracket_l,
+            .bang_angle_bracket_r,
+            .bang,
             .plus,
             .equal,
             .keyword_register,
-            .keyword_pop,
-            .keyword_psh,
+            .double_angle_bracket_l,
+            .double_angle_bracket_r,
             .colon,
             .eof,
             => {

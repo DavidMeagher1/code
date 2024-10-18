@@ -13,12 +13,6 @@ pub const Token = struct {
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
         .{ "register", .keyword_register },
-        .{ "jmp", .keyword_jmp },
-        .{ "jeq", .keyword_jeq },
-        .{ "jlt", .keyword_jlt },
-        .{ "jgt", .keyword_jgt },
-        .{ "pop", .keyword_pop },
-        .{ "psh", .keyword_psh },
     });
 
     pub fn getKeword(bytes: []const u8) ?Tag {
@@ -46,18 +40,18 @@ pub const Token = struct {
         pipe,
         angle_bracket_l,
         angle_bracket_r,
+        double_angle_bracket_l,
+        double_angle_bracket_r,
         caret,
         tilde,
         period,
+        bang,
+        bang_equ,
+        bang_angle_bracket_l,
+        bang_angle_bracket_r,
 
         //keywords
         keyword_register,
-        keyword_jmp,
-        keyword_jeq,
-        keyword_jlt,
-        keyword_jgt,
-        keyword_pop,
-        keyword_psh,
 
         pub fn lexeme(tag: Tag) ?[]const u8 {
             return switch (tag) {
@@ -83,16 +77,16 @@ pub const Token = struct {
                 .pipe => "|",
                 .angle_bracket_l => "<",
                 .angle_bracket_r => ">",
+                .double_angle_bracket_l => "<<",
+                .double_angle_bracket_r => ">>",
                 .caret => "^",
                 .tilde => "~",
                 .period => ".",
+                .bang => "!",
+                .bang_equ => "!=",
+                .bang_angle_bracket_l => "!<",
+                .bang_angle_bracket_r => "!>",
                 .keyword_register => "register",
-                .keyword_jmp => "jmp",
-                .keyword_jeq => "jeq",
-                .keyword_jgt => "jgt",
-                .keyword_jlt => "jlt",
-                .keyword_pop => "pop",
-                .keyword_psh => "psh",
             };
         }
 
@@ -124,6 +118,9 @@ pub const Tokenizer = struct {
         identifier,
         invalid,
         saw_dollar,
+        saw_angle_bracket_l,
+        saw_angle_bracket_r,
+        saw_bang,
         number_literal,
     };
 
@@ -185,12 +182,10 @@ pub const Tokenizer = struct {
                     self.index += 1;
                 },
                 '<' => {
-                    result.tag = .angle_bracket_l;
-                    self.index += 1;
+                    continue :state .saw_angle_bracket_l;
                 },
                 '>' => {
-                    result.tag = .angle_bracket_r;
-                    self.index += 1;
+                    continue :state .saw_angle_bracket_r;
                 },
                 '+' => {
                     result.tag = .plus;
@@ -240,6 +235,9 @@ pub const Tokenizer = struct {
                     result.tag = .equal;
                     self.index += 1;
                 },
+                '!' => {
+                    continue :state .saw_bang;
+                },
                 else => continue :state .invalid,
             },
             .identifier => {
@@ -277,6 +275,50 @@ pub const Tokenizer = struct {
                         continue :state .number_literal;
                     },
                     else => {},
+                }
+            },
+            .saw_angle_bracket_l => {
+                switch (self.buffer[self.index + 1]) {
+                    '<' => {
+                        result.tag = .double_angle_bracket_l;
+                        self.index += 2;
+                    },
+                    else => {
+                        result.tag = .angle_bracket_l;
+                        self.index += 1;
+                    },
+                }
+            },
+            .saw_angle_bracket_r => {
+                switch (self.buffer[self.index + 1]) {
+                    '>' => {
+                        result.tag = .double_angle_bracket_r;
+                        self.index += 2;
+                    },
+                    else => {
+                        result.tag = .angle_bracket_r;
+                        self.index += 1;
+                    },
+                }
+            },
+            .saw_bang => {
+                switch (self.buffer[self.index + 1]) {
+                    '=' => {
+                        result.tag = .bang_equ;
+                        self.index += 2;
+                    },
+                    '<' => {
+                        result.tag = .bang_angle_bracket_l;
+                        self.index += 2;
+                    },
+                    '>' => {
+                        result.tag = .bang_angle_bracket_r;
+                        self.index += 2;
+                    },
+                    else => {
+                        result.tag = .bang;
+                        self.index += 1;
+                    },
                 }
             },
             .invalid => {

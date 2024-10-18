@@ -65,6 +65,9 @@ pub const Node = struct {
         move,
         add,
         jump,
+        jump_equ,
+        jump_lth,
+        jump_gth,
         number_literal,
         identifier,
     };
@@ -135,23 +138,40 @@ pub fn tokenSlice(tree: Ast, token_index: TokenIndex) []const u8 {
     return tree.source[token.loc.start..token.loc.end];
 }
 
-fn renderError(tree: Ast, parse_error: Error) void {
+pub fn renderError(tree: Ast, parse_error: Error, stream: anytype) !void {
     //TODO make this so it can print other places than the debug
     const token_tags = tree.tokens.items(.tag);
     switch (parse_error.tag) {
         .expected_closing_bracket => {
-            std.debug.print("\n\n expected {s} got {s}\n\n", .{
+            return stream.print("expected {s} got {s}", .{
                 Token.Tag.r_bracket.symbol(),
                 token_tags[parse_error.token + @intFromBool(parse_error.token_is_prev)].symbol(),
             });
         },
         .operator_expected_argument => {
-            std.debug.print("\n operator expected another argument got {s}", .{
-                token_tags[parse_error.token + @intFromBool(parse_error.token_is_prev)].symbol(),
+            return stream.print("operator expected another argument got {s}", .{
+                (token_tags[parse_error.token + @intFromBool(parse_error.token_is_prev)]).symbol(),
+            });
+        },
+        .expected_token => {
+            return stream.print("expected {s} got '{s}'", .{
+                parse_error.extra.expected_tag.symbol(),
+                (tree.tokenSlice(parse_error.token + @intFromBool(parse_error.token_is_prev))),
+            });
+        },
+        .expected_expression => {
+            const slice = tree.tokenSlice(parse_error.token + @intFromBool(parse_error.token_is_prev));
+            return stream.print("expected expession got '{s}'", .{
+                slice,
+            });
+        },
+        .unexpected_token => {
+            return stream.print("unexpected token {s}", .{
+                (tree.tokenSlice(parse_error.token + @intFromBool(parse_error.token_is_prev))),
             });
         },
         else => {
-            std.debug.print("\nunkown error {}\n", .{parse_error.tag});
+            return stream.print("unkown error {any}", .{parse_error.tag});
         },
     }
 }
@@ -167,25 +187,27 @@ pub fn deinit(tree: *Ast, gpa: Allocator) void {
 pub const full = @import("ast_full.zig");
 const Ast = @This();
 const std = @import("std");
+const testing = std.testing;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Token = @import("tokenizer.zig").Token;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const Parse = @import("./parser.zig");
 
-test {
+test "simple parsing"{
     const GPA = std.heap.GeneralPurposeAllocator(.{});
     var gpa = GPA{};
     const alloc = gpa.allocator();
-    const source =
-        \\: test
-        \\ register r1 $1
-        \\ = [* $2 [* $3a ~$1]] this_is_an_identifier
+    defer _ = gpa.deinit();
+    const source = //watchout for errant back slashes when testing
+    \\:test
+    \\register r1 $1
+    \\! place
+    \\! place
     ;
+    
     var ast = try Ast.parse(alloc, source);
-    for (ast.errors) |err| {
-        ast.renderError(err);
-    }
     defer ast.deinit(alloc);
-    std.debug.print("\n\nOUTPUT:\n{any}\n\n", .{ast.nodes.items(.tag)});
+    try testing.expectEqual(0,ast.errors.len);
+    //try stdout.print("OUTPUT:\n{any}\n", .{ast.nodes.items(.tag)});
 }
