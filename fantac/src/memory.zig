@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Mode = @import("./cpu.zig").Mode;
+const Allocator = std.mem.Allocator;
 const Memory = @This();
 
 const ReadError = error{};
@@ -30,18 +30,24 @@ pub const MemoryWriter = struct {
         return buffer.len;
     }
 };
-
-buffer: []u8,
+gpa: Allocator = undefined,
+buffer: std.ArrayListUnmanaged(u8),
 endianness: std.builtin.Endian = .little,
 
 //TODO this is not needed
-pub fn init() Memory {
+pub fn init(gpa: Allocator, size: u32) !Memory {
     return Memory{
-        .buffer = undefined,
+        .gpa = gpa,
+        .buffer = std.ArrayListUnmanaged(u8).initCapacity(gpa, size),
     };
 }
 
-pub fn load(self: *Memory, buffer: []u8) void {
+pub fn deinit(self: *Memory) void {
+    self.buffer.deinit(self.gpa);
+    self.* = undefined;
+}
+
+pub fn load(self: *Memory, buffer: []u8) !void {
     self.buffer = buffer;
 }
 
@@ -56,3 +62,9 @@ pub fn getWriter(self: *Memory) MemoryWriter {
         .context = self,
     };
 }
+
+pub const View = struct {
+    parent: *Memory,
+    start: u32,
+    end: u32,
+};

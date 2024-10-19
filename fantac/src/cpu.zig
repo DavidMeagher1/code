@@ -39,6 +39,7 @@ pub fn CPU(comptime options: CPUOptions) type {
 
         registers: [@intFromEnum(Register.MAX) - 1]u16 = std.mem.zeroes([@intFromEnum(Register.MAX) - 1]u16),
         memory: Memory,
+        stack: Memory.View,
 
         pub fn init(memory: Memory) Self {
             var result = Self{
