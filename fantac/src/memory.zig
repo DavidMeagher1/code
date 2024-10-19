@@ -34,6 +34,7 @@ pub const MemoryWriter = struct {
 buffer: []u8,
 endianness: std.builtin.Endian = .little,
 
+//TODO this is not needed
 pub fn init() Memory {
     return Memory{
         .buffer = undefined,

@@ -1,45 +1,49 @@
-source: [:0]const u8,
-tree: Ast,
-errors: std.MultiArrayList(Error),
-code: Asm,
-scatch: std.ArrayListUnmanaged(Ast.Node.Index),
+gpa: Allocator,
+tree: *const Ast,
+register_map: std.AutoHashMapUnmanaged([]const u8, u8),
+instructions: std.MultiArrayList(Asm.Inst) = .{},
+// scratch is used for keeping track of temporary data during gen, can be Node index or an instruction reference
+scatch: std.ArrayListUnmanaged(u32) = .empty,
 
-pub const Error = struct {
-    tag: Tag,
+pub fn generate(gpa: Allocator, tree: Ast) Asm {
+    const astgen = AstGen{
+        .gpa = gpa,
+        .tree = &tree,
+    };
+    defer astgen.deinit();
 
-    pub const Tag = enum {};
-};
-
-pub fn generate(cg: *CodeGen, ast: Ast) Asm {
-    cg.source = ast.source;
+    return Asm{
+        .instructions = astgen.instructions.toOwnedSlice(gpa),
+    };
 }
 
-fn declRegister(cg: *CodeGen, decl_register: Ast.full.declRegister) !void {
-    const tree = cg.tree;
-    const code = cg.code;
+fn deinit(astgen: *AstGen, gpa: Allocator) void {
+    astgen.instructions.deinit(gpa);
+    astgen.scatch.deinit(gpa);
+    astgen.register_map.deinit(gpa);
+}
+fn block(ga: *GenAsm, node: Ast.Node.Index) !Asm.Inst.Ref {}
+fn declRegister(astgen: *AstGen, decl_register: Ast.full.declRegister) !void {
+    const tree = astgen.tree;
 
     const main_tokens = tree.nodes.items(.main_token);
 
     const name_token = decl_register.ast.ident_token;
     const name_token_raw = tree.tokenSlice(name_token);
     // need to chage this to evaluate an expression
-    const value = code.addScratch(.{
-        .tag = .number,
-        .data = .{
-            .number = try parse.parse_hex(u16, tree.tokenSlice(main_tokens[decl_register.ast.value_node])),
-        },
-    });
-    if (!code.registers.contains(name_token_raw)) {
-        code.registers.put(name_token_raw, value);
+    const value = try parse.parse_hex(u16, tree.tokenSlice(main_tokens[decl_register.ast.value_node]));
+    if (!astgen.register_map.contains(name_token_raw)) {
+        astgen.register_map.put(name_token_raw, value);
     } else {
-        //10-17-2024 not sure what to do here REREAD CODE
+        // register has already been defined
+        // also do i want defineable registers? might want to do something else for this
         @panic("TODO");
     }
 }
 
-fn evalOperator(cg: *CodeGen, node: Ast.Node.Index) !u16 {
+fn evalOperator(astgen: *AstGen, node: Ast.Node.Index) !u16 {
     //only evaluating numbers rn
-    const tree = cg.tree;
+    const tree = astgen.tree;
     const node_tags = tree.nodes.items(.tag);
     const node_data = tree.nodes.items(.data);
     const main_tokens = tree.nodes.items(.main_token);
@@ -54,7 +58,7 @@ fn evalOperator(cg: *CodeGen, node: Ast.Node.Index) !u16 {
             lval = try parse.parse_hex(u16, number_str);
         },
         else => {
-            lval = try cg.evalOperator(lhs);
+            lval = try astgen.evalOperator(lhs);
         },
     }
     if (rhs != 0) {
@@ -65,7 +69,7 @@ fn evalOperator(cg: *CodeGen, node: Ast.Node.Index) !u16 {
                 rval = try parse.parse_hex(u16, number_str);
             },
             else => {
-                rval = try cg.evalOperator(rhs);
+                rval = try astgen.evalOperator(rhs);
             },
         }
     }
@@ -84,15 +88,19 @@ fn evalOperator(cg: *CodeGen, node: Ast.Node.Index) !u16 {
     }
 }
 
-fn move(cg: *CodeGen, node: Ast.Node.Index) !void {
-    const tree = cg.tree;
+fn move(astgen: *AstGen, node: Ast.Node.Index) !void {
+    const tree = astgen.tree;
     _ = node;
     _ = tree;
 }
 
-const CodeGen = @This();
-const parse = @import("../common/parse.zig");
-const instructions = @import("../common/instructions.zig");
+const GenAsm = struct {};
+
+const AstGen = @This();
+//TODO should make common a root module
+// will work on that after codegen
+const parse = @import("../../common/parse.zig");
 const Ast = @import("./ast.zig");
-const Asm = @import("./asm.zig");
+const Asm = @import("../asm.zig");
 const std = @import("std");
+const Allocator = std.mem.Allocator;

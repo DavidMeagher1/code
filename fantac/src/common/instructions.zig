@@ -62,7 +62,7 @@ pub const Argument = union(ArgumentType) {
 pub const signatures = [_]OpCodeSignature{
     OpCodeSignature.init(
         OpCode.move_im_reg,
-        &[_]ArgumentType{ .immediate, .register },
+        &[_]ArgumentType{ .register, .immediate },
     ),
     OpCodeSignature.init(
         OpCode.move_reg_reg,
@@ -70,15 +70,15 @@ pub const signatures = [_]OpCodeSignature{
     ),
     OpCodeSignature.init(
         OpCode.move_addr_reg,
-        &[_]ArgumentType{ .address, .register },
+        &[_]ArgumentType{ .register, .address },
     ),
     OpCodeSignature.init(
         OpCode.move_im_addr,
-        &[_]ArgumentType{ .immediate, .address },
+        &[_]ArgumentType{ .address, .immediate },
     ),
     OpCodeSignature.init(
         OpCode.move_reg_addr,
-        &[_]ArgumentType{ .register, .address },
+        &[_]ArgumentType{ .address, .register },
     ),
     OpCodeSignature.init(
         OpCode.move_indirect_reg_reg,
@@ -87,7 +87,7 @@ pub const signatures = [_]OpCodeSignature{
 
     OpCodeSignature.init(
         OpCode.add_im_reg,
-        &[_]ArgumentType{ .immediate, .register },
+        &[_]ArgumentType{ .register, .immediate },
     ),
     OpCodeSignature.init(
         OpCode.add_reg_reg,
