@@ -100,10 +100,13 @@ pub const OpCode = enum(u8) {
     jump_subroutine,
     return_subroutine,
     jump_software_interrupt,
-    return_software_interrupt,
-    return_hardware_interrupt,
+    return_interrupt,
+    set_carry,
     clear_carry,
+    set_zero,
     clear_zero,
+    set_interrupt_disable,
+    clear_interrupt_disable,
     hault,
     nop, // no operation
     MAX,
@@ -115,6 +118,7 @@ pub const Register = enum(u8) {
     sp,
     bp,
     st,
+    im,
     a,
     ah, // useful for division result goes here
     al, // remainder goes here
@@ -168,31 +172,11 @@ pub const Error = error{
 pub const CPUOptions = struct {
     memory_size: u32,
     page_size: u16,
-    reset_vector: u32 = 0,
     stack_size: u12 = 0,
-    interrupt_descriptor_table_elements: u8 = 0,
-};
-
-pub const InterruptType = enum(u8) {
-    interrupt = 0,
-    trap = 1,
-    //task = 4,
-};
-
-pub const InterruptFlags = packed struct(u8) {
-    set: u1 = 0,
-    _reserved: u7 = 0,
-};
-
-pub const InterruptDescriptor = packed struct(u64) {
-    flags: InterruptFlags = .{},
-    type: InterruptType = .interrupt,
-    offset: u32 = 0,
-    _reserved: u16 = 0,
 };
 
 registers: packed struct {
-    addr: packed struct {
+    addr: packed struct(u32) {
         pc: u16 = 0,
         bs: u16 = 0,
     } = .{},
@@ -200,6 +184,7 @@ registers: packed struct {
         l: u16 = 0, // 9
         h: u16 = 0, // 7
     } = .{},
+    im: u16 = 0xFFFF,
     sp: u16 = 0, // 2
     bp: u16 = 0, // 4
     bc: packed struct(u16) {
@@ -218,16 +203,12 @@ gpa: Allocator,
 endian: std.builtin.Endian = builtin.cpu.arch.endian(),
 memory: []u8,
 stack: Stack = undefined,
-interrupt_descriptor_table_size: u16,
-interrupt_descriptor_table_ptr: u16 = undefined,
 running: bool = false,
 
 pub fn init(gpa: Allocator, options: CPUOptions) !CPU {
-    const interrupt_descriptor_table_size = options.interrupt_descriptor_table_elements * @sizeOf(InterruptDescriptor);
     var result = CPU{
         .gpa = gpa,
         .memory = try gpa.alloc(u8, options.memory_size),
-        .interrupt_descriptor_table_size = interrupt_descriptor_table_size,
     };
     const stack_position = options.page_size - options.stack_size;
     result.stack = Stack{
@@ -235,17 +216,6 @@ pub fn init(gpa: Allocator, options: CPUOptions) !CPU {
         .sp = options.stack_size,
         .base_addr = stack_position,
     };
-    result.interrupt_descriptor_table_ptr = stack_position - interrupt_descriptor_table_size;
-    // @memcpy(result.memory[result.interrupt_descriptor_table_ptr .. result.interrupt_descriptor_table_ptr + 4], std.mem.asBytes(&options.reset_vector));
-    const idt_reset = InterruptDescriptor{
-        .flags = .{ .set = 1 },
-        .offset = options.reset_vector,
-        .type = .interrupt,
-    };
-    @memcpy(
-        result.memory[result.interrupt_descriptor_table_ptr .. result.interrupt_descriptor_table_ptr + @sizeOf(InterruptDescriptor)],
-        std.mem.asBytes(&idt_reset),
-    );
     result.registers.sp = options.page_size;
     result.registers.bp = result.registers.sp;
     return result;
@@ -253,9 +223,8 @@ pub fn init(gpa: Allocator, options: CPUOptions) !CPU {
 
 pub fn reset(self: *CPU) void {
     const addr: *u32 = @ptrCast(&self.registers.addr);
-    addr.* = self.interrupt_descriptor_table_ptr;
-    const idt_reset = std.mem.bytesToValue(InterruptDescriptor, self.memory[addr.* .. addr.* + @sizeOf(InterruptDescriptor)]);
-    addr.* = idt_reset.offset;
+    const reset_offset = std.mem.bytesToValue(u32, self.memory[0..4]);
+    addr.* = reset_offset;
     self.running = true;
 }
 
@@ -278,6 +247,7 @@ inline fn getRegister(self: *CPU, id: Register) Error![]u8 {
         .sp => std.mem.asBytes(&self.registers.sp),
         .bp => std.mem.asBytes(&self.registers.bp),
         .st => std.mem.asBytes(&self.registers.st),
+        .im => std.mem.asBytes(&self.registers.im),
         .a => std.mem.asBytes(&self.registers.a),
         .al => std.mem.asBytes(&self.registers.a.l),
         .ah => std.mem.asBytes(&self.registers.a.h),
@@ -292,9 +262,9 @@ inline fn getRegister(self: *CPU, id: Register) Error![]u8 {
     };
 }
 
-fn isZero(x: anytype) u1 {
-    const info = @typeInfo(@TypeOf(x)).int;
-    return @intFromBool(@clz(x) == info.bits);
+inline fn isZero(x: anytype) u1 {
+    _ = @typeInfo(@TypeOf(x)).int;
+    return 1 ^ @subWithOverflow(0, x)[1];
 }
 
 inline fn sign(x: anytype) u1 {
@@ -303,37 +273,63 @@ inline fn sign(x: anytype) u1 {
     return @intCast(@shrExact(x & @shlExact(1, shift_amount), shift_amount) & 1);
 }
 
-fn saveContext(self: *CPU, include_a: bool) !void {
+fn saveContext(self: *CPU) !void {
     _ = try self.stack.push(std.mem.asBytes(&self.registers.addr));
-    _ = try self.stack.push(std.mem.asBytes(&self.registers.bp));
-    if (include_a) {
+    if (self.registers.st.@"break" == 0) {
         _ = try self.stack.push(std.mem.asBytes(&self.registers.a));
     }
+    _ = try self.stack.push(std.mem.asBytes(&self.registers.im));
+    _ = try self.stack.push(std.mem.asBytes(&self.registers.bp));
     _ = try self.stack.push(std.mem.asBytes(&self.registers.bc));
     _ = try self.stack.push(std.mem.asBytes(&self.registers.d));
     _ = try self.stack.push(std.mem.asBytes(&self.registers.e));
     _ = try self.stack.push(std.mem.asBytes(&self.registers.f));
-    self.registers.sp = try self.stack.push(std.mem.asBytes(&self.registers.g));
+    _ = try self.stack.push(std.mem.asBytes(&self.registers.g));
+    self.registers.sp = try self.stack.push(std.mem.asBytes(&self.registers.st));
 }
 
-fn loadContext(self: *CPU, include_a: bool) !void {
+fn loadContext(self: *CPU) !void {
+    self.registers.st = std.mem.bytesToValue(StatusRegister, (try self.stack.pop(1))[0]);
     self.registers.g = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     self.registers.f = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     self.registers.e = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     self.registers.d = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     @as(*u16, @ptrCast(&self.registers.bc)).* = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     self.registers.bp = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
-    if (include_a) {
+    self.registers.im = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
+    if (self.registers.st.@"break" == 0) {
         @as(*u32, @ptrCast(&self.registers.a)).* = std.mem.bytesToValue(u32, (try self.stack.pop(4))[0]);
     }
-    @as(*u32, @ptrCast(&self.registers.addr)).* = std.mem.bytesToValue(u32, (try self.stack.pop(4))[0]);
+    const last_result = try self.stack.pop(4);
+    @as(*u32, @ptrCast(&self.registers.addr)).* = std.mem.bytesToValue(u32, last_result[0]);
+    self.registers.sp = last_result[1];
 }
 
-pub fn hardware_interrupt(self: *CPU, irq_id: u8, maskable: bool) void {
-    //when hardware has an interrupt we need to know if its maskable or not
-    _ = self;
-    _ = irq_id;
-    _ = maskable;
+fn interrupt(self: *CPU, irq_id: u16, maskable: bool, hardware: bool) !void {
+    //all interrupts are disabled by default even non maskable ones
+    // this should be turned off as soon as you are ready to handle them
+    if (self.registers.st.interrupt_disable == 1 or (maskable and self.registers.im & irq_id != irq_id)) {
+        return;
+    }
+    if (hardware) {
+        self.registers.st.@"break" = 0;
+    } else {
+        self.registers.st.@"break" = 1;
+    }
+    self.registers.st.interrupt_disable = 1;
+    try self.saveContext();
+    self.registers.sp = try self.stack.push(std.mem.asBytes(&irq_id));
+    const pc = @as(*u32, @ptrCast(&self.registers.addr));
+    if (maskable) {
+        pc.* = std.mem.bytesToValue(u32, self.memory[8..12]);
+        std.debug.print("\nPC:{}\n", .{pc.*});
+    } else {
+        pc.* = std.mem.bytesToValue(u32, self.memory[4..8]);
+    }
+}
+
+pub fn hardwareInterrupt(self: *CPU, irq_id: u16, maskable: bool) void {
+    self.interrupt(irq_id, maskable, true);
 }
 
 pub fn step(self: *CPU) !bool {
@@ -347,7 +343,7 @@ pub fn step(self: *CPU) !bool {
     }
     pc.* += 1;
     switch (op_code) {
-        .nop => {},
+        .nop, .MAX => {},
         .move_byte_reg_im => {
             const dest = try self.getRegister(@enumFromInt(self.memory[pc.*]));
             pc.* += 1;
@@ -1005,49 +1001,38 @@ pub fn step(self: *CPU) !bool {
             self.registers.addr.pc = std.mem.bytesToValue(u16, low_part);
         },
         .jump_software_interrupt => {
-            const interrupt_id: u8 = std.mem.bytesToValue(u4, self.memory[pc.* .. pc.* + 1]);
-            pc.* += 1;
-            if (self.registers.st.interrupt_disable != 1) {
-                const table_offset: u16 = interrupt_id * @sizeOf(InterruptDescriptor);
-                if (table_offset > self.interrupt_descriptor_table_size) {
-                    @panic("unknown interrupt id");
-                }
-
-                const interrupt_descriptor: InterruptDescriptor = std.mem.bytesToValue(
-                    InterruptDescriptor,
-                    self.memory[self.interrupt_descriptor_table_ptr + table_offset .. self.interrupt_descriptor_table_ptr + table_offset + @sizeOf(InterruptDescriptor)],
-                );
-                if (interrupt_descriptor.flags.set == 1) {
-                    // now that we have the interrupt vector we need to setup the stack
-                    try self.saveContext(false);
-                    // now i need to set status registers
-                    var status = self.registers.st;
-                    // this is a software interrupt so set break to 1
-                    status.@"break" = 1;
-                    self.registers.sp = try self.stack.push(std.mem.asBytes(&status));
-
-                    pc.* = interrupt_descriptor.offset;
-                }
-            }
+            const interrupt_id: u16 = std.mem.bytesToValue(u16, self.memory[pc.* .. pc.* + 2]);
+            pc.* += 2;
+            try self.interrupt(interrupt_id, true, false);
         },
-        .return_software_interrupt => {
+        .return_interrupt => {
             //when returning from a software interrupt ignore what the break flag was set to, its only to notifiy
             // the interrupt handler
-            const status: u8 = std.mem.bytesToValue(u8, (try self.stack.pop(1))[0]);
-            @as(*u8, @ptrCast(&self.registers.st)).* |= status & 0xb;
-            try self.loadContext(false);
+            try self.loadContext();
+            self.registers.st.interrupt_disable = 0;
+        },
+        .set_carry => {
+            self.registers.st.carry = 1;
         },
         .clear_carry => {
             self.registers.st.carry = 0;
         },
+        .set_zero => {
+            self.registers.st.zero = 1;
+        },
         .clear_zero => {
             self.registers.st.zero = 0;
+        },
+        .set_interrupt_disable => {
+            self.registers.st.interrupt_disable = 1;
+        },
+        .clear_interrupt_disable => {
+            self.registers.st.interrupt_disable = 0;
         },
         .hault => {
             self.running = false;
             return false;
         },
-        else => unreachable,
     }
     return true;
     // after step check program register
@@ -1065,8 +1050,19 @@ test "move byte instructions" {
         .page_size = 0x40,
         .stack_size = 0x0,
     });
-    cpu.reset();
     const code: []const u8 = &[_]u8{
+        0xc, // reset vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // nmi vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // irq vector
+        0x0,
+        0x0,
+        0x0,
         @intFromEnum(OpCode.move_byte_reg_im),
         @intFromEnum(Register.d),
         0x7,
@@ -1087,6 +1083,7 @@ test "move byte instructions" {
         @intFromEnum(Register.e),
     };
     @memcpy(cpu.memory[0..code.len], code);
+    cpu.reset();
     _ = try cpu.step();
     try testing.expectEqual(0x7, cpu.registers.d);
     _ = try cpu.step();
@@ -1109,8 +1106,19 @@ test "move short instructions" {
         .page_size = 0x40,
         .stack_size = 0x0,
     });
-    cpu.reset();
     const code: []const u8 = &[_]u8{
+        0xc, // reset vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // nmi vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // irq vector
+        0x0,
+        0x0,
+        0x0,
         @intFromEnum(OpCode.move_short_reg_im),
         @intFromEnum(Register.d),
         0x07,
@@ -1133,6 +1141,7 @@ test "move short instructions" {
         @intFromEnum(Register.e),
     };
     @memcpy(cpu.memory[0..code.len], code);
+    cpu.reset();
     _ = try cpu.step();
     try testing.expectEqual(0x1107, cpu.registers.d);
     _ = try cpu.step();
@@ -1154,8 +1163,19 @@ test "stack byte operations" {
         .page_size = 0x40,
         .stack_size = 0x20,
     });
-    cpu.reset();
     const code: []const u8 = &[_]u8{
+        0xc, // reset vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // nmi vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // irq vector
+        0x0,
+        0x0,
+        0x0,
         @intFromEnum(OpCode.push_byte_im),
         0x01,
         @intFromEnum(OpCode.push_byte_im),
@@ -1176,6 +1196,7 @@ test "stack byte operations" {
         @intFromEnum(Register.b),
     };
     @memcpy(cpu.memory[0..code.len], code);
+    cpu.reset();
     _ = try cpu.step();
     try testing.expectEqual(0x01, (try cpu.stack.peek(1))[0]);
     _ = try cpu.step();
@@ -1207,8 +1228,19 @@ test "stack short operations" {
         .page_size = 0x80,
         .stack_size = 0x80,
     });
-    cpu.reset();
     const code: []const u8 = &[_]u8{
+        0xc, // reset vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // nmi vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // irq vector
+        0x0,
+        0x0,
+        0x0,
         @intFromEnum(OpCode.push_short_im),
         0x01,
         0x11,
@@ -1232,6 +1264,7 @@ test "stack short operations" {
         @intFromEnum(Register.d),
     };
     @memcpy(cpu.memory[0..code.len], code);
+    cpu.reset();
     _ = try cpu.step();
     try testing.expectEqual(0x1101, std.mem.bytesToValue(u16, try cpu.stack.peek(2)));
     _ = try cpu.step();
@@ -1265,6 +1298,18 @@ test "subroutines" {
     });
     cpu.reset();
     const code_1: []const u8 = &[_]u8{
+        0xc, // reset vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // nmi vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // irq vector
+        0x0,
+        0x0,
+        0x0,
         @intFromEnum(OpCode.push_byte_im),
         0x22,
         @intFromEnum(OpCode.jump_subroutine),
@@ -1285,6 +1330,7 @@ test "subroutines" {
         @intFromEnum(OpCode.return_subroutine),
     };
     @memcpy(cpu.memory[0x1F000 .. 0x1F000 + code_2.len], code_2);
+    cpu.reset();
     _ = try cpu.step(); // [0x22]
     try testing.expectEqual(0x22, (try cpu.stack.peek(1))[0]);
     _ = try cpu.step(); // jsr
@@ -1309,8 +1355,19 @@ test "loop" {
         .page_size = 0x80,
         .stack_size = 0x80,
     });
-    cpu.reset();
     const code: []const u8 = &[_]u8{
+        0xc, // reset vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // nmi vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // irq vector
+        0x0,
+        0x0,
+        0x0,
         @intFromEnum(OpCode.add_byte_reg_im),
         @intFromEnum(Register.b),
         0x01,
@@ -1320,11 +1377,12 @@ test "loop" {
         @intFromEnum(OpCode.compare_byte_im),
         0xa,
         @intFromEnum(OpCode.short_jump_lth),
-        0x00,
+        0x0c,
         0x00,
         @intFromEnum(OpCode.hault),
     };
     @memcpy(cpu.memory[0..code.len], code);
+    cpu.reset();
     while (true) {
         if (!(try cpu.step())) {
             break;
@@ -1341,36 +1399,45 @@ test "software interrupt" {
         .memory_size = 0x1FFFF,
         .page_size = 0xFFFF,
         .stack_size = 0xFFF,
-        .interrupt_descriptor_table_elements = 0xF,
     });
-    const id_test = InterruptDescriptor{
-        .flags = .{ .set = 1 },
-        .offset = 0x10000,
-    };
-    @memcpy(cpu.memory[cpu.interrupt_descriptor_table_ptr + @sizeOf(InterruptDescriptor) .. cpu.interrupt_descriptor_table_ptr + (@sizeOf(InterruptDescriptor) * 2)], std.mem.asBytes(&id_test));
-    cpu.reset();
     const test_interrupt: []const u8 = &[_]u8{
+        @intFromEnum(OpCode.drop_short),
+        @intFromEnum(OpCode.peek_byte),
+        @intFromEnum(Register.al),
+        @intFromEnum(OpCode.band_byte_im),
+        0x10,
+        @intFromEnum(OpCode.compare_byte_im),
+        0x10,
+        @intFromEnum(OpCode.short_jump_lth),
+        0xd,
+        0x0,
         @intFromEnum(OpCode.move_byte_reg_im),
         @intFromEnum(Register.al),
         0x99,
-        @intFromEnum(OpCode.return_software_interrupt),
+        @intFromEnum(OpCode.return_interrupt),
     };
     @memcpy(cpu.memory[0x10000 .. 0x10000 + test_interrupt.len], test_interrupt);
     const code: []const u8 = &[_]u8{
-        @intFromEnum(OpCode.move_byte_reg_reg), // enable interrups
-        @intFromEnum(Register.al),
-        @intFromEnum(Register.st),
-        @intFromEnum(OpCode.bxor_byte_im),
-        0x10,
-        @intFromEnum(OpCode.move_byte_reg_reg),
-        @intFromEnum(Register.st),
-        @intFromEnum(Register.al),
+        0xc, // reset vector
+        0x0,
+        0x0,
+        0x0,
+        0x0, // nmi vector
+        0x0,
+        0x0,
+        0x0,
+        0x00, // irq vector
+        0x00,
+        0x01,
+        0x00,
+        @intFromEnum(OpCode.clear_interrupt_disable),
         @intFromEnum(OpCode.jump_software_interrupt),
         0x01,
+        0x00,
         @intFromEnum(OpCode.hault),
     };
     @memcpy(cpu.memory[0..code.len], code);
-
+    cpu.reset();
     while (true) {
         if (!(try cpu.step())) {
             break;
