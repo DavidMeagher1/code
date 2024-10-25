@@ -1,8 +1,23 @@
+gpa: std.mem.Allocator,
+working_stack: Stack,
+return_stack: Stack,
+scratch_stack: Stack,
+memory: []u8,
+reset_vector_position: u16,
+nmi_vector_position: u16,
+irq_vector_position: u16,
+interrupt_mask_position: u16,
+pc: u16 = 0,
+
+pub const Error = error{
+    invalidMicroCode,
+};
+
+pub const Stack = stack.Stack(2);
+
 pub const MicroCode = enum(u8) {
     store,
     load,
-    //reserve,
-    //unreserve,
     literal,
     pop,
     swap,
@@ -13,7 +28,7 @@ pub const MicroCode = enum(u8) {
     sub,
     mul,
     div,
-    mod,
+    rem,
     binary_and,
     binary_or,
     binary_xor,
@@ -25,18 +40,40 @@ pub const MicroCode = enum(u8) {
     stash,
     unstash,
     jump,
+    jump_im,
     jump_conditional,
     jump_subroutine,
+    jump_subroutine_im,
     jump_interrupt,
     return_subroutine,
     return_interrupt,
+
+    store2,
+    load2,
+    pop2,
+    swap2,
+    over2,
+    nip2,
+    rot2,
+    add2,
+    sub2,
+    mul2,
+    div2,
+    rem2,
+    binary_and2,
+    binary_or2,
+    binary_xor2,
+    shift_left2,
+    shift_right2,
+    equal2,
+    less_than2,
+    greater_than2,
+    stash2,
+    unstash2,
+
     hault,
     nop,
     MAX,
-};
-
-pub const Error = error{
-    invalidMicroCode,
 };
 
 pub const CPUOptions = struct {
@@ -49,19 +86,6 @@ pub const CPUOptions = struct {
     irq_vector_position: u16 = 4,
     interrupt_mask_position: u16 = 6,
 };
-
-pub const Stack = stack.Stack(2);
-
-gpa: std.mem.Allocator,
-working_stack: Stack,
-return_stack: Stack,
-scratch_stack: Stack,
-memory: []u8,
-reset_vector_position: u16,
-nmi_vector_position: u16,
-irq_vector_position: u16,
-interrupt_mask_position: u16,
-pc: u16 = 0,
 
 pub fn init(gpa: std.mem.Allocator, options: CPUOptions) !CPU {
     return CPU{
@@ -146,12 +170,6 @@ pub fn step(self: *CPU) !bool {
             try self.working_stack.pop(&address);
             try self.working_stack.push(self.memory[address]);
         },
-        // .reserve => {
-        //     try self.working_stack.reserveBytes(1);
-        // },
-        // .unreserve => {
-        //     try self.working_stack.unreserveBytes(1);
-        // },
         .literal => {
             const im_val = self.memory[self.pc];
             self.pc += 1;
@@ -200,7 +218,7 @@ pub fn step(self: *CPU) !bool {
             try self.working_stack.pop(&a);
             try self.working_stack.push(@divFloor(a, b));
         },
-        .mod => {
+        .rem => {
             var a: u8 = undefined;
             var b: u8 = undefined;
             try self.working_stack.pop(&b);
@@ -278,6 +296,10 @@ pub fn step(self: *CPU) !bool {
             try self.working_stack.pop(&address);
             self.pc = address;
         },
+        .jump_im => {
+            const address: u16 = std.mem.bytesToValue(u16, self.memory[self.pc .. self.pc + 2]);
+            self.pc = address;
+        },
         .jump_conditional => {
             var address: u16 = undefined;
             var condition: u8 = undefined;
@@ -290,6 +312,12 @@ pub fn step(self: *CPU) !bool {
         .jump_subroutine => {
             var address: u16 = undefined;
             try self.working_stack.pop(&address);
+            try self.return_stack.push(self.pc);
+            self.pc = address;
+        },
+        .jump_subroutine_im => {
+            const address: u16 = std.mem.bytesToValue(u16, self.memory[self.pc .. self.pc + 2]);
+            self.pc += 2;
             try self.return_stack.push(self.pc);
             self.pc = address;
         },
@@ -311,6 +339,134 @@ pub fn step(self: *CPU) !bool {
             var address: u16 = undefined;
             try self.return_stack.pop(&address);
             self.pc = address;
+        },
+        .store2 => {
+            var value: [2]u8 = undefined;
+            try self.working_stack.popBytes(2, &value);
+            var address: u16 = undefined;
+            try self.working_stack.pop(&address);
+            @memcpy(self.memory[address .. address + 2], &value);
+        },
+        .load2 => {
+            var address: u16 = undefined;
+            try self.working_stack.pop(&address);
+            try self.working_stack.pushBytes(self.memory[address .. address + 2]);
+        },
+        .pop2 => {
+            try self.working_stack.drop(u16);
+        },
+        .swap2 => {
+            try self.working_stack.swap(u16);
+        },
+        .over2 => {
+            try self.working_stack.over(u16);
+        },
+        .nip2 => {
+            try self.working_stack.nip(u16);
+        },
+        .rot2 => {
+            try self.working_stack.rot(u16);
+        },
+        .add2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@addWithOverflow(a, b)[0]);
+        },
+        .sub2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@subWithOverflow(a, b)[0]);
+        },
+        .mul2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@mulWithOverflow(a, b)[0]);
+        },
+        .div2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@divFloor(a, b));
+        },
+        .rem2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(a - (b * @divFloor(a, b)));
+        },
+        .binary_and2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(a & b);
+        },
+        .binary_or2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(a | b);
+        },
+        .binary_xor2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(a ^ b);
+        },
+        .shift_left2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(a <<| b);
+        },
+        .shift_right2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@divTrunc(a, b * 2));
+        },
+        .equal2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@as(u8, @intFromBool(a == b)));
+        },
+        .less_than2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@as(u8, @intFromBool(a < b)));
+        },
+        .greater_than2 => {
+            var a: u16 = undefined;
+            var b: u16 = undefined;
+            try self.working_stack.pop(&b);
+            try self.working_stack.pop(&a);
+            try self.working_stack.push(@as(u8, @intFromBool(a > b)));
+        },
+        .stash2 => {
+            var a: u16 = undefined;
+            try self.working_stack.pop(&a);
+            try self.return_stack.push(a);
+        },
+        .unstash2 => {
+            var a: u16 = undefined;
+            try self.return_stack.pop(&a);
+            try self.working_stack.push(a);
         },
     }
     return true;
@@ -334,7 +490,7 @@ test "basic stuff" {
         0x69,
         @intFromEnum(MicroCode.literal),
         0x20,
-        @intFromEnum(MicroCode.mod),
+        @intFromEnum(MicroCode.rem),
         @intFromEnum(MicroCode.hault),
     });
     cpu.reset();
