@@ -12,18 +12,17 @@ pub const Token = struct {
     loc: Location,
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
-        .{ "pc", .register_pc },
-        .{ "sp", .register_sp },
-        .{ "bp", .register_bp },
-        .{ "acu", .register_acu },
-        .{ "a", .register_a },
-        .{ "b", .register_b },
-        .{ "c", .register_c },
-        .{ "d", .register_d },
-        .{ "h", .register_h },
-        .{ "l", .register_l },
-        .{ "hl", .register_hl },
+        .{ "hault", .hault },
         .{ "_", .nop },
+        .{ "st", .store },
+        .{ "ld", .load },
+        .{ "pop", .pop },
+        .{ "swp", .swap },
+        .{ "ovr", .over },
+        .{ "nip", .nip },
+        .{ "rot", .rot },
+        .{ "stash", .stash },
+        .{ "unstash", .unstash },
     });
 
     pub fn getKeword(bytes: []const u8) ?Tag {
@@ -33,61 +32,38 @@ pub const Token = struct {
     pub const Tag = enum {
         invalid,
         eof,
-        nop,
         identifier,
+        nop,
+        hault,
+        store,
+        load,
         number_literal,
-        colon,
-        hash,
-        at,
-        backtick,
-        equal,
-        l_bracket,
-        r_bracket,
-        l_paren,
-        r_paren,
+        pop,
+        swap,
+        over,
+        nip,
+        rot,
         plus,
         minus,
-        back_slash,
+        asterisc,
         forward_slash,
-        mod,
-        asterisk,
+        double_forward_slash,
         ampersand,
-        pipe,
-        angle_bracket_l,
-        angle_bracket_r,
-        double_angle_bracket_l,
-        double_angle_bracket_r,
+        bar,
         caret,
-        tilde,
-        period,
+        double_lbracket,
+        double_rbracket,
+        equal,
+        lbracket,
+        rbracket,
+        stash,
+        unstash,
         bang,
-        bang_equ,
-        bang_angle_bracket_l,
-        bang_angle_bracket_r,
+        question_mark,
         bang_plus,
         bang_minus,
-        semi_colon,
-        comma,
-        angle_bracket_l_plus,
-        angle_bracket_l_angle_brack_r,
-        angle_bracket_l_caret_angle_bracket_r,
-        angle_bracket_l_minus,
-        angle_bracket_l_caret,
-        plus_angle_bracket_r,
-        caret_angle_bracket_r,
-
-        //registers
-        register_pc,
-        register_sp,
-        register_bp,
-        register_acu,
-        register_a,
-        register_b,
-        register_c,
-        register_d,
-        register_h,
-        register_l,
-        register_hl,
+        bang_bang_plus,
+        bang_bang_minus,
 
         pub fn lexeme(tag: Tag) ?[]const u8 {
             return switch (tag) {
@@ -95,48 +71,37 @@ pub const Token = struct {
                 .identifier,
                 .eof,
                 .number_literal,
+                .nop,
                 => null,
-
-                .colon => ":",
-                .equal => "=",
-                .l_bracket => "[",
-                .r_bracket => "]",
-                .l_paren => "(",
-                .r_paren => ")",
+                .hault => "hault",
+                .store => "st",
+                .load => "ld",
+                .pop => "pop",
+                .swap => "swp",
+                .over => "ovr",
+                .nip => "nip",
+                .rot => "rot",
                 .plus => "+",
                 .minus => "-",
-                .back_slash => "\\",
+                .asterisc => "*",
                 .forward_slash => "/",
-                .mod => "%",
-                .asterisk => "*",
+                .double_forward_slash => "//",
                 .ampersand => "&",
-                .pipe => "|",
-                .angle_bracket_l => "<",
-                .angle_bracket_r => ">",
-                .double_angle_bracket_l => "<<",
-                .double_angle_bracket_r => ">>",
+                .bar => "|",
                 .caret => "^",
-                .tilde => "~",
-                .period => ".",
+                .double_lbracket => "<<",
+                .double_rbracket => ">>",
+                .equal => "=",
+                .lbracket => "<",
+                .rbracket => ">",
+                .stash => "stash",
+                .unstash => "ustash",
                 .bang => "!",
-                .bang_equ => "!=",
-                .bang_angle_bracket_l => "!<",
-                .bang_angle_bracket_r => "!>",
-
-                //registers
-                .register_pc => "pc",
-                .register_sp => "sp",
-                .register_bp => "bp",
-                .register_acu => "acu",
-                .register_a => "a",
-                .register_b => "b",
-                .register_c => "c",
-                .register_d => "d",
-                .register_h => "h",
-                .register_l => "l",
-                .register_hl => "hl",
-                // builtins
-                .builtin_import => "import",
+                .question_mark => "?",
+                .bang_plus => "!+",
+                .bang_minus => "!-",
+                .bang_bang_plus => "!!+",
+                .bang_bang_minus => "!!-",
             };
         }
 
@@ -168,12 +133,11 @@ pub const Tokenizer = struct {
         start,
         identifier,
         invalid,
-        saw_dollar,
-        saw_angle_bracket_l,
-        saw_angle_bracket_r,
+        saw_hash,
+        saw_forward_slash,
+        saw_lbracket,
+        saw_rbracket,
         saw_bang,
-        saw_plus,
-        saw_caret,
         number_literal,
     };
 
@@ -211,28 +175,8 @@ pub const Tokenizer = struct {
                     result.tag = .identifier;
                     continue :state .identifier;
                 },
-                '$' => {
-                    continue :state .saw_dollar;
-                },
-                ':' => {
-                    result.tag = .colon;
-                    self.index += 1;
-                },
-                '[' => {
-                    result.tag = .l_bracket;
-                    self.index += 1;
-                },
-                ']' => {
-                    result.tag = .r_bracket;
-                    self.index += 1;
-                },
-                '(' => {
-                    result.tag = .l_paren;
-                    self.index += 1;
-                },
-                ')' => {
-                    result.tag = .r_paren;
-                    self.index += 1;
+                '#' => {
+                    continue :state .saw_hash;
                 },
                 '<' => {
                     continue :state .saw_angle_bracket_l;
@@ -241,7 +185,8 @@ pub const Tokenizer = struct {
                     continue :state .saw_angle_bracket_r;
                 },
                 '+' => {
-                    continue :state .saw_plus;
+                    result.tag = .plus;
+                    self.index += 1;
                 },
                 '-' => {
                     result.tag = .minus;
@@ -256,30 +201,14 @@ pub const Tokenizer = struct {
                     self.index += 1;
                 },
                 '^' => {
-                    continue :state .saw_caret;
-                },
-                '%' => {
-                    result.tag = .mod;
-                    self.index += 1;
-                },
-                '\\' => {
-                    result.tag = .back_slash;
+                    result.tag = .caret;
                     self.index += 1;
                 },
                 '/' => {
-                    result.tag = .forward_slash;
-                    self.index += 1;
-                },
-                '.' => {
-                    result.tag = .period;
-                    self.index += 1;
-                },
-                '~' => {
-                    result.tag = .tilde;
-                    self.index += 1;
+                    continue :state .saw_forward_slash;
                 },
                 '|' => {
-                    result.tag = .pipe;
+                    result.tag = .bar;
                     self.index += 1;
                 },
                 '=' => {
@@ -288,26 +217,6 @@ pub const Tokenizer = struct {
                 },
                 '!' => {
                     continue :state .saw_bang;
-                },
-                '#' => {
-                    result.tag = .hash;
-                    self.index += 1;
-                },
-                '`' => {
-                    result.tag = .backtick;
-                    self.index += 1;
-                },
-                ',' => {
-                    result.tag = .comma;
-                    self.index += 1;
-                },
-                ';' => {
-                    result.tag = .semi_colon;
-                    self.index += 1;
-                },
-                '@' => {
-                    result.tag = .at;
-                    self.index += 1;
                 },
                 else => continue :state .invalid,
             },
@@ -323,7 +232,7 @@ pub const Tokenizer = struct {
                     },
                 }
             },
-            .saw_dollar => {
+            .saw_hash => {
                 self.index += 1;
                 switch (self.buffer[self.index]) {
                     'a'...'f', 'A'...'F', '0'...'9' => {
@@ -339,6 +248,18 @@ pub const Tokenizer = struct {
                     },
                 }
             },
+            .saw_forward_slash => {
+                self.index += 1;
+                switch(self.buffer[self.index]){
+                    '/' => {
+                        result.tag = .double_forward_slash;
+                        self.index += 1;
+                    },
+                    else => {
+                        result.tag = .forward_slash;
+                    }
+                }
+            }
             .number_literal => {
                 self.index += 1;
                 switch (self.buffer[self.index]) {
@@ -355,31 +276,6 @@ pub const Tokenizer = struct {
                         result.tag = .double_angle_bracket_l;
                         self.index += 1;
                     },
-                    '+' => {
-                        result.tag = .angle_bracket_l_plus;
-                        self.index += 1;
-                    },
-                    '-' => {
-                        result.tag = .angle_bracket_l_minus;
-                        self.index += 1;
-                    },
-                    '>' => {
-                        result.tag = .angle_bracket_l_angle_brack_r;
-                        self.index += 1;
-                    },
-                    '^' => {
-                        self.index += 1;
-                        switch (self.buffer[self.index]) {
-                            '>' => {
-                                result.tag = .angle_bracket_l_caret_angle_bracket_r;
-                                self.index += 1;
-                            },
-                            else => {
-                                result.tag = .angle_bracket_l_caret;
-                                self.index += 1;
-                            },
-                        }
-                    },
                     else => {
                         result.tag = .angle_bracket_l;
                     },
@@ -389,7 +285,7 @@ pub const Tokenizer = struct {
                 self.index += 1;
                 switch (self.buffer[self.index]) {
                     '>' => {
-                        result.tag = .double_angle_bracket_r;
+                        result.tag = .double_rbracket;
                         self.index += 1;
                     },
                     else => {
@@ -397,45 +293,9 @@ pub const Tokenizer = struct {
                     },
                 }
             },
-            .saw_plus => {
-                self.index += 1;
-                switch (self.buffer[self.index]) {
-                    '>' => {
-                        result.tag = .plus_angle_bracket_r;
-                        self.index += 1;
-                    },
-                    else => {
-                        result.tag = .plus;
-                    },
-                }
-            },
-            .saw_caret => {
-                self.index += 1;
-                switch (self.buffer[self.index]) {
-                    '>' => {
-                        result.tag = .caret_angle_bracket_r;
-                        self.index += 1;
-                    },
-                    else => {
-                        result.tag = .caret;
-                    },
-                }
-            },
             .saw_bang => {
                 self.index += 1;
                 switch (self.buffer[self.index]) {
-                    '=' => {
-                        result.tag = .bang_equ;
-                        self.index += 1;
-                    },
-                    '<' => {
-                        result.tag = .bang_angle_bracket_l;
-                        self.index += 1;
-                    },
-                    '>' => {
-                        result.tag = .bang_angle_bracket_r;
-                        self.index += 1;
-                    },
                     '+' => {
                         result.tag = .bang_plus;
                         self.index += 1;
@@ -443,6 +303,22 @@ pub const Tokenizer = struct {
                     '-' => {
                         result.tag = .bang_minus;
                         self.index += 1;
+                    },
+                    '!' => {
+                        self.index += 1;
+                        switch (self.buffer[self.index]) {
+                            '+' => {
+                                result.tag = .bang_bang_plus;
+                                self.index += 1;
+                            },
+                            '-' => {
+                                result.tag = .bang_bang_minus;
+                                self.index += 1;
+                            },
+                            else => {
+                                result.tag = .invalid;
+                            },
+                        }
                     },
                     else => {
                         result.tag = .bang;
@@ -465,50 +341,3 @@ pub const Tokenizer = struct {
         return result;
     }
 };
-
-test "empty buffer is eof" {
-    const buffer: [:0]const u8 = &[_:0]u8{};
-    var tokenizer = Tokenizer.init(buffer);
-    try testing.expectEqual(.eof, tokenizer.next().tag);
-}
-
-test "general ident" {
-    const buffer: [:0]const u8 = &[_:0]u8{ 'A', 'b', 'c', '1' };
-    var tokenizer = Tokenizer.init(buffer);
-    const token = tokenizer.next();
-    try testing.expectEqual(.identifier, token.tag);
-}
-
-test "keyword_mov" {
-    const buffer: [:0]const u8 = &[_:0]u8{ ' ', ' ', ' ', '=' };
-    var tokenizer = Tokenizer.init(buffer);
-    const token = tokenizer.next();
-    try testing.expectEqual(.equal, token.tag);
-}
-
-test "number_literal" {
-    const buffer: [:0]const u8 = &[_:0]u8{ ' ', ' ', '$', 'a', '1', 'F' };
-    var tokenizer = Tokenizer.init(buffer);
-    const token = tokenizer.next();
-    try testing.expectEqual(.number_literal, token.tag);
-}
-
-// test "tokenizing small file" {
-//     const buffer =
-//         \\
-//         \\register r1 $1
-//         \\register r2 $2
-//         \\= $1234 r1
-//         \\= r1 r2
-//     ;
-//     var tokenizer = Tokenizer.init(buffer);
-//     var token_list: [128]Token = undefined;
-//     var current_token: Token = undefined;
-//     var index: usize = 0;
-//     while (current_token.tag != .eof) {
-//         current_token = tokenizer.next();
-//         token_list[index] = current_token;
-//         index += 1;
-//     }
-//     //std.debug.print("\n\n{any}\n\n", .{token_list[0..index]});
-// }

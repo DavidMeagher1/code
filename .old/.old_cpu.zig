@@ -54,8 +54,8 @@ pub const OpCode = enum(u8) {
     move_short_reg_addr,
     move_short_addr_im,
     move_short_addr_reg,
-    move_short_indirect_rel_reg_reg,
-    move_short_indirect_zp_reg_reg,
+    move_short_indirect_reg_reg,
+    move_short_indirect_reg_im,
     //math
     add_short_reg_im,
     add_short_reg_reg,
@@ -113,15 +113,14 @@ pub const OpCode = enum(u8) {
 };
 
 pub const Register = enum(u8) {
-    bs,
     pc,
     sp,
     bp,
     st,
     im,
     a,
-    ah, // useful for division result goes here
-    al, // remainder goes here
+    al,
+    ah,
     b,
     c,
     bc,
@@ -129,25 +128,8 @@ pub const Register = enum(u8) {
     e,
     f,
     g,
-    //combination register for h and l, useful for doing operations on a 32 bit number
     MAX,
-    //_,
-    // pub const Offset = enum(u8) {
-    //     pc = 0,
-    //     sp = 2,
-    //     pb = 4,
-    //     st = 6,
-    //     acuh = 7,
-    //     acul = 9,
-    //     a = 11,
-    //     b = 13,
-    //     c = 15,
-    //     d = 16,
-    //     h = 17,
-    //     l = 19,
-    // };
 };
-//TODO add reset vector, non maskable interrupt vector and interrupt request vector
 
 const StatusRegister = packed struct(u8) {
     negative: u1 = 0, // tells if the last operation produced a negative value
@@ -176,13 +158,10 @@ pub const CPUOptions = struct {
 };
 
 registers: packed struct {
-    addr: packed struct(u32) {
-        pc: u16 = 0,
-        bs: u16 = 0,
-    } = .{},
-    a: packed struct(u32) { // 7
-        l: u16 = 0, // 9
-        h: u16 = 0, // 7
+    pc: u16 = 0,
+    a: packed struct(u16) {
+        l: u8 = 0,
+        h: u8 = 0,
     } = .{},
     im: u16 = 0xFFFF,
     sp: u16 = 0, // 2
@@ -222,9 +201,8 @@ pub fn init(gpa: Allocator, options: CPUOptions) !CPU {
 }
 
 pub fn reset(self: *CPU) void {
-    const addr: *u32 = @ptrCast(&self.registers.addr);
-    const reset_offset = std.mem.bytesToValue(u32, self.memory[0..4]);
-    addr.* = reset_offset;
+    const reset_offset = std.mem.bytesToValue(u32, self.memory[0..2]);
+    self.registers.pc = reset_offset;
     self.running = true;
 }
 
@@ -242,7 +220,6 @@ inline fn getRegister(self: *CPU, id: Register) Error![]u8 {
         return error.UnknownRegister;
     }
     return switch (id) {
-        .bs => error.InvalidAccess,
         .pc => std.mem.asBytes(&self.registers.addr.pc),
         .sp => std.mem.asBytes(&self.registers.sp),
         .bp => std.mem.asBytes(&self.registers.bp),
@@ -274,7 +251,7 @@ inline fn sign(x: anytype) u1 {
 }
 
 fn saveContext(self: *CPU) !void {
-    _ = try self.stack.push(std.mem.asBytes(&self.registers.addr));
+    _ = try self.stack.push(std.mem.asBytes(&self.registers.pc));
     if (self.registers.st.@"break" == 0) {
         _ = try self.stack.push(std.mem.asBytes(&self.registers.a));
     }
@@ -298,17 +275,17 @@ fn loadContext(self: *CPU) !void {
     self.registers.bp = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     self.registers.im = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     if (self.registers.st.@"break" == 0) {
-        @as(*u32, @ptrCast(&self.registers.a)).* = std.mem.bytesToValue(u32, (try self.stack.pop(4))[0]);
+        @as(*u16, @ptrCast(&self.registers.a)).* = std.mem.bytesToValue(u16, (try self.stack.pop(2))[0]);
     }
-    const last_result = try self.stack.pop(4);
-    @as(*u32, @ptrCast(&self.registers.addr)).* = std.mem.bytesToValue(u32, last_result[0]);
+    const last_result = try self.stack.pop(2);
+    self.registers.pc = std.mem.bytesToValue(u16, last_result[0]);
     self.registers.sp = last_result[1];
 }
 
 fn interrupt(self: *CPU, irq_id: u16, maskable: bool, hardware: bool) !void {
     //all interrupts are disabled by default even non maskable ones
     // this should be turned off as soon as you are ready to handle them
-    if (self.registers.st.interrupt_disable == 1 or (maskable and self.registers.im & irq_id != irq_id)) {
+    if ((maskable and self.registers.st.interrupt_disable == 1) or (maskable and self.registers.im & irq_id != irq_id)) {
         return;
     }
     if (hardware) {
@@ -319,12 +296,10 @@ fn interrupt(self: *CPU, irq_id: u16, maskable: bool, hardware: bool) !void {
     self.registers.st.interrupt_disable = 1;
     try self.saveContext();
     self.registers.sp = try self.stack.push(std.mem.asBytes(&irq_id));
-    const pc = @as(*u32, @ptrCast(&self.registers.addr));
     if (maskable) {
-        pc.* = std.mem.bytesToValue(u32, self.memory[8..12]);
-        std.debug.print("\nPC:{}\n", .{pc.*});
+        self.registers.pc = std.mem.bytesToValue(u16, self.memory[4..6]);
     } else {
-        pc.* = std.mem.bytesToValue(u32, self.memory[4..8]);
+        self.registers.pc = std.mem.bytesToValue(u16, self.memory[2..4]);
     }
 }
 
@@ -336,7 +311,8 @@ pub fn step(self: *CPU) !bool {
     if (!self.running) {
         return false;
     }
-    const pc: *u32 = @ptrCast(&self.registers.addr);
+    const pc: *u16 = &self.registers.pc;
+    const acu: *u16 = @as(*u16, @ptrCast(&self.registers.a));
     const op_code: OpCode = @enumFromInt(self.memory[pc.*]);
     if (@intFromEnum(op_code) >= @intFromEnum(OpCode.MAX)) {
         return error.InvalidOpCode;
@@ -383,21 +359,21 @@ pub fn step(self: *CPU) !bool {
             pc.* += 1;
             @memcpy(dest, register[0..1]);
         },
-        .move_byte_indirect_rel_reg_reg => {
-            const dest = try self.getRegister(@enumFromInt(self.memory[pc.*]));
-            pc.* += 1;
-            const addr = @shlExact(@as(u32, self.registers.addr.bs), 16) + std.mem.bytesToValue(u16, try self.getRegister(@enumFromInt(self.memory[pc.*])));
-            pc.* += 1;
-            const payload = self.memory[addr .. addr + 1];
-            @memcpy(dest[0..1], payload);
-        },
-        .move_byte_indirect_zp_reg_reg => {
+        .move_byte_indirect_reg_reg => {
             const dest = try self.getRegister(@enumFromInt(self.memory[pc.*]));
             pc.* += 1;
             const addr = std.mem.bytesToValue(u16, try self.getRegister(@enumFromInt(self.memory[pc.*])));
             pc.* += 1;
             const payload = self.memory[addr .. addr + 1];
             @memcpy(dest[0..1], payload);
+        },
+        .move_byte_indirect_reg_im => {
+            const addr = std.mem.bytesToValue(u16, try self.getRegister(@enumFromInt(self.memory[pc.*])));
+            pc.* += 1;
+            const im_val = self.memory[pc.* .. pc.* + 1];
+            pc.* += 1;
+            const memory = self.memory[addr .. addr + 1];
+            @memcpy(memory, im_val);
         },
         //math // these all effect a.l
         .add_byte_reg_im => {
@@ -416,7 +392,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @addWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -436,7 +412,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @addWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -456,7 +432,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @subWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -476,7 +452,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @subWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -487,7 +463,7 @@ pub fn step(self: *CPU) !bool {
             pc.* += 1;
             const result = @mulWithOverflow(a, b);
             self.registers.st.carry = result[1];
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -498,19 +474,19 @@ pub fn step(self: *CPU) !bool {
             pc.* += 1;
             const result = @subWithOverflow(a, b);
             self.registers.st.carry = result[1];
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
-        .div_byte_reg_im => { // division puts the product in the top byte of a.l and the remainder in the low byte a.l
+        .div_byte_reg_im => { // division puts the product in the top byte of a and the remainder in the low byte a
             const a: u8 = std.mem.bytesToValue(u8, (try self.getRegister(@enumFromInt(self.memory[pc.*])))[0..1]);
             pc.* += 1;
             const b: u8 = std.mem.bytesToValue(u8, self.memory[pc.* .. pc.* + 1]);
             pc.* += 1;
             const product: u8 = @divFloor(a, b);
             const remainder: u8 = a - product;
-            const result: u16 = @shlExact(@as(u16, @intCast(product)), 8) | remainder;
-            self.registers.a.l = result;
+            self.registers.a.l = remainder;
+            self.register.a.h = product;
             self.registers.st.negative = sign(product);
             self.registers.st.zero = isZero(product);
         },
@@ -521,22 +497,22 @@ pub fn step(self: *CPU) !bool {
             pc.* += 1;
             const product: u8 = @divFloor(a, b);
             const remainder: u8 = a - product;
-            const result: u16 = @shlExact(@as(u16, @intCast(product)), 8) | remainder;
-            self.registers.a.l = result;
+            self.registers.a.l = remainder;
+            self.register.a.h = product;
             self.registers.st.negative = sign(product);
             self.registers.st.zero = isZero(product);
         },
         .compare_byte_im => {
             const im_val: u8 = std.mem.bytesToValue(u8, self.memory[pc.* .. pc.* + 1]);
             pc.* += 1;
-            const product = @subWithOverflow(@as(u8, @intCast(self.registers.a.l & 0x00ff)), im_val);
+            const product = @subWithOverflow(acu.*, im_val);
             self.registers.st.carry = 1 ^ (product[1] & isZero(product[0]));
             self.registers.st.zero = isZero(product[0]);
         },
         .compare_byte_reg => {
             const register: u8 = std.mem.bytesToValue(u8, (try self.getRegister(@enumFromInt(self.memory[pc.*])))[0..1]);
             pc.* += 1;
-            const product = @subWithOverflow(@as(u8, @intCast(self.registers.a.l & 0x00ff)), register);
+            const product = @subWithOverflow(acu.*, register);
             self.registers.st.carry = 1 ^ (product[1] & isZero(product[0]));
             self.registers.st.zero = isZero(product[0]);
         },
@@ -545,32 +521,32 @@ pub fn step(self: *CPU) !bool {
         .band_byte_im => {
             const im_val: u8 = std.mem.bytesToValue(u8, self.memory[pc.* .. pc.* + 1]);
             pc.* += 1;
-            self.registers.a.l = self.registers.a.l & @as(u16, @intCast(im_val));
+            acu.* &= @as(u16, @intCast(im_val));
         },
         .band_byte_reg => {
             const register: u8 = std.mem.bytesToValue(u8, (try self.getRegister(@enumFromInt(self.memory[pc.*])))[0..1]);
             pc.* += 1;
-            self.registers.a.l = self.registers.a.l & @as(u16, @intCast(register));
+            acu.* &= @as(u16, @intCast(register));
         },
         .bor_byte_im => {
             const im_val: u8 = std.mem.bytesToValue(u8, self.memory[pc.* .. pc.* + 1]);
             pc.* += 1;
-            self.registers.a.l = self.registers.a.l | @as(u16, @intCast(im_val));
+            acu.* |= @as(u16, @intCast(im_val));
         },
         .bor_byte_reg => {
             const register: u8 = std.mem.bytesToValue(u8, (try self.getRegister(@enumFromInt(self.memory[pc.*])))[0..1]);
             pc.* += 1;
-            self.registers.a.l = self.registers.a.l | @as(u16, @intCast(register));
+            acu.* |= @as(u16, @intCast(register));
         },
         .bxor_byte_im => {
             const im_val: u8 = std.mem.bytesToValue(u8, self.memory[pc.* .. pc.* + 1]);
             pc.* += 1;
-            self.registers.a.l = self.registers.a.l ^ @as(u16, @intCast(im_val));
+            acu.* ^= @as(u16, @intCast(im_val));
         },
         .bxor_byte_reg => {
             const register: u8 = std.mem.bytesToValue(u8, (try self.getRegister(@enumFromInt(self.memory[pc.*])))[0..1]);
             pc.* += 1;
-            self.registers.a.l = self.registers.a.l ^ @as(u16, @intCast(register));
+            acu.* ^= @as(u16, @intCast(register));
         },
 
         // stack operations
@@ -694,7 +670,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @addWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -714,7 +690,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @addWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -734,7 +710,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @subWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -754,7 +730,7 @@ pub fn step(self: *CPU) !bool {
             };
             const result = @subWithOverflow(awc, b);
             self.registers.st.carry = result[1] | carry;
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -765,7 +741,7 @@ pub fn step(self: *CPU) !bool {
             pc.* += 2;
             const result = @mulWithOverflow(a, b);
             self.registers.st.carry = result[1];
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
@@ -776,7 +752,7 @@ pub fn step(self: *CPU) !bool {
             pc.* += 1;
             const result = @subWithOverflow(a, b);
             self.registers.st.carry = result[1];
-            self.registers.a.l = result[0];
+            acu.* = result[0];
             self.registers.st.negative = sign(result[0]);
             self.registers.st.zero = isZero(result[0]);
         },
