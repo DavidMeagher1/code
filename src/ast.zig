@@ -8,10 +8,7 @@ const Token = @import("token.zig");
 const Parse = @import("parse.zig");
 
 const NodeList = MultiArrayList(Node);
-const TokenList = MultiArrayList(struct {
-    tag: Token.Tag,
-    start: u32,
-});
+const TokenList = MultiArrayList(Token);
 
 nodes: NodeList.Slice,
 tokens: TokenList.Slice,
