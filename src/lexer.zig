@@ -6,10 +6,10 @@ const State = enum {
     invalid,
     start,
     identifier,
-    qualified_dot,
-    qualified_identifier,
     number,
+    character,
     string,
+    comment,
 };
 
 input: [:0]const u8,
@@ -29,6 +29,7 @@ pub fn next(self: *Lexer) ?Token {
             .end_line = self.line,
         },
     };
+    var comment_level: u32 = 0;
     state: switch (State.start) {
         .start => {
             switch (self.input[self.position]) {
@@ -36,16 +37,22 @@ pub fn next(self: *Lexer) ?Token {
                     token.tag = .eof;
                 },
                 'a'...'z', 'A'...'Z', '_' => {
-                    token.tag = .identifier;
+                    token.tag = .invalid;
                     continue :state .identifier;
                 },
-                '0'...'9' => {
+                '0'...'9', '-' => {
                     token.tag = .number_literal;
                     continue :state .number;
                 },
                 '"' => {
                     token.tag = .string_literal;
+                    self.advance(); // skip the opening "
                     continue :state .string;
+                },
+                '\'' => {
+                    token.tag = .character_literal;
+                    self.advance(); // skip the '
+                    continue :state .character;
                 },
                 '\n' => {
                     self.position += 1;
@@ -57,163 +64,98 @@ pub fn next(self: *Lexer) ?Token {
                     self.advance();
                     continue :state .start;
                 },
-                '.' => {
-                    token.tag = .period;
-                    self.advance();
+                '&' => {
+                    token.tag = .local_label;
+                    continue :state .identifier;
                 },
                 ':' => {
-                    token.tag = .colon;
-                    if (self.peek()) |c| {
-                        if (c == '.') {
-                            self.advance();
-                            token.tag = .colon_period;
-                        }
-                    }
-                    self.advance();
-                },
-                ';' => {
-                    token.tag = .semicolon;
-                    self.advance();
-                },
-                '=' => {
-                    token.tag = .equal;
-                    self.advance();
+                    token.tag = .global_label;
+                    continue :state .identifier;
                 },
                 '|' => {
                     token.tag = .bar;
-                    if (self.peek()) |c| {
-                        if (c == '|') {
-                            self.advance();
-                            token.tag = .double_bar;
-                        }
-                    }
                     self.advance();
                 },
                 '$' => {
                     token.tag = .dollar;
                     self.advance();
                 },
-                '+' => {
-                    token.tag = .plus;
-                    self.advance();
-                },
-                '-' => {
-                    token.tag = .minus;
-                    self.advance();
-                },
-                '*' => {
-                    token.tag = .asterisk;
-                    self.advance();
-                },
-                '/' => {
-                    token.tag = .slash;
-                    self.advance();
-                },
-                '%' => {
-                    token.tag = .percent;
-                    self.advance();
-                },
-                '<' => {
-                    token.tag = .less_than;
-                    if (self.peek()) |c| {
-                        if (c == '=') {
-                            self.advance();
-                            token.tag = .less_equal;
-                        } else if (c == '<') {
-                            self.advance();
-                            token.tag = .double_less_than;
-                        }
-                    }
-                    self.advance();
-                },
-                '>' => {
-                    token.tag = .greater_than;
-                    if (self.peek()) |c| {
-                        if (c == '=') {
-                            self.advance();
-                            token.tag = .greater_equal;
-                        } else if (c == '>') {
-                            self.advance();
-                            token.tag = .double_greater_than;
-                        }
-                    }
-                    self.advance();
-                },
-                '!' => {
-                    token.tag = .exclamation;
-                    if (self.peek()) |c| {
-                        if (c == '=') {
-                            self.advance();
-                            token.tag = .not_equal;
-                        }
-                    }
-                    self.advance();
-                },
-                '&' => {
-                    token.tag = .ampersand;
-                    if (self.peek()) |c| {
-                        if (c == '&') {
-                            self.advance();
-                            token.tag = .double_ampersand;
-                        }
-                    }
-                    self.advance();
-                },
-                '^' => {
-                    token.tag = .caret;
-                    self.advance();
-                },
-                '~' => {
-                    token.tag = .tilde;
-                    self.advance();
-                },
-                '`' => {
-                    token.tag = .back_tick;
-                    self.advance();
-                },
-                ',' => {
-                    token.tag = .comma;
-                    self.advance();
-                },
                 '(' => {
-                    token.tag = .lparen;
-                    self.advance();
-                },
-                ')' => {
-                    token.tag = .rparen;
-                    self.advance();
-                },
-                '[' => {
-                    token.tag = .lbracket;
-                    self.advance();
-                },
-                ']' => {
-                    token.tag = .rbracket;
-                    self.advance();
-                },
-                '{' => {
-                    token.tag = .lbrace;
-                    self.advance();
-                },
-                '}' => {
-                    token.tag = .rbrace;
-                    self.advance();
+                    token.tag = .comment;
+                    comment_level += 1;
+                    continue :state .comment;
                 },
                 '@' => {
-                    token.tag = .at;
-                    self.advance();
+                    token.tag = .label_reference;
+                    continue :state .identifier;
                 },
                 '#' => {
                     token.tag = .hash;
                     self.advance();
                 },
-                '\\' => {
-                    token.tag = .backslash;
-                    self.advance();
-                },
                 '?' => {
                     token.tag = .question;
                     self.advance();
+                },
+                '!' => {
+                    if (self.peek()) |ch| {
+                        if (ch == '=') {
+                            token.tag = .bang_equal;
+                            self.advance(); // consume '!'
+                            self.advance(); // consume '='
+                        } else {
+                            token.tag = .exclamation;
+                            self.advance(); // consume '!'
+                        }
+                    } else {
+                        token.tag = .exclamation;
+                        self.advance(); // consume '!' at EOF
+                    }
+                },
+                '=' => {
+                    if (self.peek()) |ch| {
+                        if (ch == '=') {
+                            token.tag = .equal_equal;
+                            self.advance(); // consume '='
+                            self.advance(); // consume '='
+                        } else {
+                            token.tag = .invalid; // single = not valid
+                            self.advance(); // consume '='
+                        }
+                    } else {
+                        token.tag = .invalid; // single = at EOF not valid
+                        self.advance();
+                    }
+                },
+                '<' => {
+                    if (self.peek()) |ch| {
+                        if (ch == '=') {
+                            token.tag = .less_equal;
+                            self.advance(); // consume '<'
+                            self.advance(); // consume '='
+                        } else {
+                            token.tag = .less_than;
+                            self.advance(); // consume '<'
+                        }
+                    } else {
+                        token.tag = .less_than;
+                        self.advance(); // consume '<' at EOF
+                    }
+                },
+                '>' => {
+                    if (self.peek()) |ch| {
+                        if (ch == '=') {
+                            token.tag = .greater_equal;
+                            self.advance(); // consume '>'
+                            self.advance(); // consume '='
+                        } else {
+                            token.tag = .greater_than;
+                            self.advance(); // consume '>'
+                        }
+                    } else {
+                        token.tag = .greater_than;
+                        self.advance(); // consume '>' at EOF
+                    }
                 },
                 else => {
                     // Handle other single-character tokens
@@ -226,6 +168,10 @@ pub fn next(self: *Lexer) ?Token {
             self.advance();
             switch (self.input[self.position]) {
                 '0'...'9', 'a'...'f', 'A'...'F' => continue :state .number,
+                'b', 'w' => {
+                    // suffix for size can be 'b' for byte or 'w' for word
+                    self.advance();
+                },
                 else => {},
             }
         },
@@ -233,47 +179,53 @@ pub fn next(self: *Lexer) ?Token {
             self.advance();
             switch (self.input[self.position]) {
                 'a'...'z', 'A'...'Z', '0'...'9', '_' => continue :state .identifier,
-                '.' => {
-                    continue :state .qualified_dot;
+                else => {
+                    // Check if it's a keyword
+                    const lexeme = self.input[token.location.start_index..self.position];
+                    if (Token.get_keyword(lexeme)) |kw_tag| {
+                        token.tag = kw_tag;
+                    }
                 },
-                else => {},
             }
         },
-        .qualified_dot => {
-            self.advance();
+        .character => {
             switch (self.input[self.position]) {
-                'a'...'z', 'A'...'Z', '_' => {
-                    token.tag = .qualified_identifier;
-                    continue :state .qualified_identifier;
+                ' ', '\t', '\r', '\n', 0 => {
+                    // Whitespace after ' is error
+                    token.tag = .invalid;
                 },
                 else => {
-                    // Invalid token after dot
-                    token.tag = .invalid;
-                    continue :state .invalid;
+                    // Successfully got one character
+                    self.advance();
                 },
-            }
-        },
-        .qualified_identifier => {
-            self.advance();
-            switch (self.input[self.position]) {
-                'a'...'z', 'A'...'Z', '0'...'9', '_' => continue :state .qualified_identifier,
-                '.' => {
-                    continue :state .qualified_dot;
-                },
-                else => {},
             }
         },
         .string => {
+            switch (self.input[self.position]) {
+                ' ', '\t', '\r', '\n', 0 => {},
+                else => {
+                    self.advance();
+                    continue :state .string;
+                },
+            }
+        },
+        .comment => {
             self.advance();
             switch (self.input[self.position]) {
-                '"' => {
-                    self.advance();
+                '(' => {
+                    comment_level += 1;
+                    continue :state .comment;
                 },
-                0 => {
-                    token.tag = .invalid;
-                    continue :state .invalid;
+                ')' => {
+                    comment_level -= 1;
+                    if (comment_level == 0) {
+                        self.advance();
+                    } else {
+                        continue :state .comment;
+                    }
                 },
-                else => continue :state .string,
+                0 => {},
+                else => continue :state .comment,
             }
         },
         .invalid => {
