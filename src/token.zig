@@ -45,9 +45,10 @@ pub const Tag = enum {
     // Symbols
     global_label, // : global label definition
     local_label, // & local label definition
-    label_reference, // @ label reference
-    bar, // | absolute padding
-    dollar, // $ relative padding
+    absolute_label_reference, // @ label reference
+    relative_label_reference, // ; label reference
+    absolute_padding, // |number absolute padding
+    relative_padding, // $number relative padding
     hash, // # push (size determined by value/suffix)
     exclamation, // ! jmp (size determined by immediate)
     question, // ? jnz (size determined by immediate)
@@ -239,10 +240,8 @@ pub fn get_keyword(word: []const u8) ?Tag {
 
 pub fn lexeme(self: Token) ?[]const u8 {
     return switch (self.tag) {
-        .identifier, .number_literal, .string_literal, .character_literal, .comment, .global_label, .local_label => null,
-        .at => "@",
-        .bar => "|",
-        .dollar => "$",
+        .number_literal, .string_literal, .character_literal, .global_label, .local_label, .absolute_label_reference, .relative_label_reference, .absolute_padding, .relative_padding => null,
+        .comment => null,
         .hash => "#",
         .exclamation => "!",
         .question => "?",
@@ -339,13 +338,15 @@ pub fn symbol(self: Token) []const u8 {
     return self.lexeme() orelse switch (self.tag) {
         .invalid => "an Invalid Token",
         .eof => "End of File",
-        .identifier => "an Identifier",
-        .global_label => "a Global Label",
-        .local_label => "a Local Label",
         .number_literal => "a Number Literal",
         .string_literal => "a String Literal",
         .character_literal => "a Character Literal",
         .comment => "a Comment",
-        else => unreachable,
+        .global_label => "a Global Label",
+        .local_label => "a Local Label",
+        .absolute_label_reference => "an Absolute Label Reference",
+        .relative_label_reference => "a Relative Label Reference",
+        .absolute_padding => "Absolute Padding",
+        .relative_padding => "Relative Padding",
     };
 }
