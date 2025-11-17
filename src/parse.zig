@@ -47,6 +47,7 @@ source: []const u8,
 tokens: []Token,
 chunks: ChunkList,
 references: ArrayListUnmanaged(Reference),
+external_identifiers: StringHashMapUnmanaged(u8),
 scope_stack: ArrayListUnmanaged(*Scope),
 
 pub fn init(allocator: Allocator, source: []const u8, tokens: []Token) Error!Assembler {
@@ -58,6 +59,7 @@ pub fn init(allocator: Allocator, source: []const u8, tokens: []Token) Error!Ass
         .tokens = tokens,
         .chunks = .empty,
         .references = .empty,
+        .external_identifiers = .empty,
         .scope_stack = .empty,
     };
     try result.scope_stack.append(allocator, global_scope);
@@ -72,6 +74,7 @@ pub fn deinit(self: *Assembler) void {
     self.references.deinit(self.gpa);
     self.scope_stack.items[0].deinit(self.gpa); // this recursively deinitializes child scopes
     self.gpa.destroy(self.scope_stack.items[0]);
+    self.external_identifiers.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
     self.source = &[_]u8{};
     self.tokens = &[_]Token{};
@@ -128,6 +131,19 @@ fn pass1(self: *Assembler) Error!void {
         const tok = self.tokens[i];
 
         switch (tok.tag) {
+            .identifier => {
+                // General identifier - treat as error for now
+                // TODO needs to be updated in the spec but these will be used as
+                // shorthands for traps that can be registered externally
+                const lexeme = self.getLexeme(tok);
+                if (self.external_identifiers.get(lexeme)) |trap_id| {
+                    // Emit TRAP opcode with trap_id
+                    try current_chunk.instructions.append(self.gpa, @intFromEnum(Opcodes.trap));
+                    try current_chunk.instructions.append(self.gpa, trap_id);
+                } else {
+                    return error.InvalidToken;
+                }
+            },
             .global_label => {
                 // :name - create new scope
                 const name = self.getLexeme(tok);
@@ -682,6 +698,10 @@ fn emitReference(self: *Assembler, output: *ArrayListUnmanaged(u8), chunk: *cons
             }
         },
     }
+}
+
+pub fn registerExternalIdentifier(self: *Assembler, name: []const u8, trap_id: u8) Error!void {
+    try self.external_identifiers.put(self.gpa, name, trap_id);
 }
 
 pub fn assemble(self: *Assembler) Error![]u8 {
