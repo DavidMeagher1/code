@@ -7,6 +7,18 @@ const Scope = @import("scope.zig");
 const Opcodes = @import("opcodes.zig").Opcodes;
 const Assembler = @This();
 
+const Error = error{
+    InvalidToken,
+    UnexpectedEOF,
+    ExpectedNumberAfterTrap,
+    InvalidPaddingAddress,
+    BackwardPadding,
+    NegativeRelativePadding,
+    UndefinedLabel,
+    OffsetOutOfRange,
+    RelativeJumpOutOfRange,
+} || Allocator.Error || std.fmt.ParseIntError;
+
 const Chunk = union(enum) {
     instructions: ArrayListUnmanaged(u8),
     absolute_padding: u32,
@@ -37,7 +49,7 @@ chunks: ChunkList,
 references: ArrayListUnmanaged(Reference),
 scope_stack: ArrayListUnmanaged(*Scope),
 
-pub fn init(allocator: Allocator, source: []const u8, tokens: []Token) !Assembler {
+pub fn init(allocator: Allocator, source: []const u8, tokens: []Token) Error!Assembler {
     const global_scope = try allocator.create(Scope);
     global_scope.* = Scope.init(".global.", null);
     var result = Assembler{
@@ -80,7 +92,7 @@ fn currentScope(self: *Assembler) ?*Scope {
     return self.scope_stack.items[self.scope_stack.items.len - 1];
 }
 
-fn pushScope(self: *Assembler, scope: *Scope) !void {
+fn pushScope(self: *Assembler, scope: *Scope) Allocator.Error!void {
     try self.scope_stack.append(self.gpa, scope);
 }
 
@@ -91,7 +103,7 @@ fn popScope(self: *Assembler) ?*Scope {
     return self.scope_stack.pop();
 }
 
-fn emitByte(self: *Assembler, byte: u8) !void {
+fn emitByte(self: *Assembler, byte: u8) Allocator.Error!void {
     if (self.chunks.items.len == 0) {
         const new_chunk = undefined;
         try self.chunks.append(self.gpa, new_chunk);
@@ -100,13 +112,13 @@ fn emitByte(self: *Assembler, byte: u8) !void {
     try self.chunks.items[last_index].instructions.append(self.gpa, byte);
 }
 
-fn emitBytes(self: *Assembler, bytes: []const u8) !void {
+fn emitBytes(self: *Assembler, bytes: []const u8) Allocator.Error!void {
     for (bytes) |b| {
         try self.emitByte(b);
     }
 }
 
-fn pass1(self: *Assembler) !void {
+fn pass1(self: *Assembler) Error!void {
     var current_chunk = Chunk{ .instructions = .empty };
     var current_scope: *Scope = self.currentScope().?;
     var current_position: u32 = 0;
@@ -434,12 +446,42 @@ fn pass1(self: *Assembler) !void {
                 try current_chunk.instructions.append(self.gpa, 0x05); // >=
             },
 
+            .number_literal => {
+                // Emit number as data
+                const val = try self.parseNumber(tok);
+                if (val >= -128 and val <= 255) {
+                    try current_chunk.instructions.append(self.gpa, @intCast(@as(u16, @bitCast(@as(i16, @intCast(val)))) & 0xFF));
+                } else {
+                    const bytes = std.mem.toBytes(@as(u16, @bitCast(@as(i16, @intCast(val)))));
+                    try current_chunk.instructions.appendSlice(self.gpa, &bytes);
+                }
+            },
+
+            .string_literal => {
+                // Emit string bytes (without quotes)
+                const lexeme = self.getLexeme(tok);
+                // Remove surrounding quotes
+                const str = lexeme[1 .. lexeme.len - 1];
+                // TODO: Handle escape sequences
+                try current_chunk.instructions.appendSlice(self.gpa, str);
+            },
+
+            .character_literal => {
+                // Emit character byte
+                const lexeme = self.getLexeme(tok);
+                // Remove surrounding quotes
+                const char = lexeme[1];
+                // TODO: Handle escape sequences
+                try current_chunk.instructions.append(self.gpa, char);
+            },
+
             .eof => break,
             .comment => {},
-            else => {
-                std.debug.print("Unhandled token: {s}\n", .{@tagName(tok.tag)});
-                return error.UnhandledToken;
-            },
+            .invalid => return error.InvalidToken,
+            // else => {
+            //     std.debug.print("Unhandled token: {s}\n", .{@tagName(tok.tag)});
+            //     return error.UnhandledToken;
+            // },
         }
     }
 
@@ -457,7 +499,7 @@ fn getLexeme(self: *Assembler, tok: Token) []const u8 {
     return self.source[start..tok.location.end_index];
 }
 
-fn parseNumber(self: *Assembler, tok: Token) !i32 {
+fn parseNumber(self: *Assembler, tok: Token) std.fmt.ParseIntError!i32 {
     const lexeme = self.getLexeme(tok);
 
     // Check for negative
@@ -481,7 +523,7 @@ fn parseNumber(self: *Assembler, tok: Token) !i32 {
     return if (is_negative) -@as(i32, val) else @as(i32, val);
 }
 
-fn pass2(self: *Assembler) ![]u8 {
+fn pass2(self: *Assembler) Error![]u8 {
     // Step 1: Calculate chunk addresses with reference sizes
     var addr: u32 = 0;
     for (self.chunks.items, 0..) |chunk, i| {
@@ -570,7 +612,7 @@ fn calculateRefSize(self: *Assembler, chunk: *const Chunk, current_addr: u32, ta
         else => if (target_addr <= 0xFF) 1 else 2, // Bare @label or unknown
     };
 }
-fn emitReference(self: *Assembler, output: *ArrayListUnmanaged(u8), chunk: *const Chunk, current_addr: u32, target_addr: u32, is_relative: bool) !void {
+fn emitReference(self: *Assembler, output: *ArrayListUnmanaged(u8), chunk: *const Chunk, current_addr: u32, target_addr: u32, is_relative: bool) Error!void {
     const instructions = switch (chunk.*) {
         .instructions => |*list| list,
         else => &ArrayListUnmanaged(u8).empty,
@@ -642,7 +684,7 @@ fn emitReference(self: *Assembler, output: *ArrayListUnmanaged(u8), chunk: *cons
     }
 }
 
-pub fn assemble(self: *Assembler) ![]u8 {
+pub fn assemble(self: *Assembler) Error![]u8 {
     try self.pass1();
     return try self.pass2();
 }
