@@ -4,9 +4,8 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const StringHashMapUnmanaged = std.StringHashMapUnmanaged;
 const Scope = @This();
 
-const Definition = struct {
-    chunk_index: u32,
-    offset: u32,
+pub const Definition = struct {
+    address: u32,
 };
 
 name: []const u8 = ".global.", // this is an invalid label name so it won't conflict
@@ -58,11 +57,11 @@ pub fn getFullName(self: *Scope, allocator: Allocator) ![]const u8 {
     return full_name;
 }
 
-pub fn resolveSymbol(self: *Scope, symbol: []const u8) ?Definition {
+pub fn resolveSymbol(self: *Scope, symbol: []const u8) ?u32 {
     var current: ?*Scope = self;
     while (current) |scope| {
-        if (scope.symbols.get(symbol)) {
-            return scope.symbols.get(symbol).*;
+        if (scope.symbols.get(symbol)) |def| {
+            return def.address;
         }
         current = scope.parent;
     }
