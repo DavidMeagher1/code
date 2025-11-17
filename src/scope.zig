@@ -33,15 +33,15 @@ pub fn deinit(self: *Scope, allocator: Allocator) void {
     self.name = &[_]u8{}; // we assume the name memory is managed elsewhere
 }
 
-pub fn addChild(self: *Scope, allocator: Allocator, child: *Scope) !void {
+pub fn addChild(self: *Scope, allocator: Allocator, child: *Scope) Allocator.Error!void {
     try self.children.append(allocator, child);
 }
 
-pub fn addSymbol(self: *Scope, allocator: Allocator, name: []const u8, def: Definition) !void {
+pub fn addSymbol(self: *Scope, allocator: Allocator, name: []const u8, def: Definition) Allocator.Error!void {
     try self.symbols.put(allocator, name, def);
 }
 
-pub fn getFullName(self: *Scope, allocator: Allocator) ![]const u8 {
+pub fn getFullName(self: *Scope, allocator: Allocator) Allocator.Error![]const u8 {
     var parts = ArrayListUnmanaged([]const u8).empty;
     defer parts.deinit(allocator);
 
