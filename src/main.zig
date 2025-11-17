@@ -16,9 +16,9 @@ pub fn main() !void {
         \\    # 5
         \\&loop
         \\    DUP
-        \\    TRAP 01
+        \\    PRINT_CHR
         \\    # 10
-        \\    TRAP 01
+        \\    PRINT_CHR
         \\    DEC
         \\    DUP
         \\    ? ;loop
@@ -59,6 +59,8 @@ pub fn main() !void {
     // Assemble
     var assembler = try Assembler.init(allocator, source, tokens.items);
     defer assembler.deinit();
+    // Register external identifiers
+    try assembler.registerExternalIdentifier("PRINT_CHR", 0x01);
 
     const bytecode = try assembler.assemble();
     defer allocator.free(bytecode);
