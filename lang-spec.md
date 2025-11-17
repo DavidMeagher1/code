@@ -10,10 +10,12 @@ ___
    - [Opcode Families](#opcode-families)
      - [System / Traps](#system--traps)
      - [Control flow](#control-flow)
+     - [Comparison](#comparison)
      - [Stack manipulation](#stack-manipulation)
      - [Arithmetic](#arithmetic)
      - [Bitwise](#bitwise)
      - [Memory access](#memory-access)
+     - [Unused IDs (0x28-0x3F)](#unused-ids-0x28-0x3f)
 2. [Binary file specification](#binary-file-specification)
    - [File Structure](#file-structure)
    - [File Header](#file-header)
@@ -41,6 +43,7 @@ ___
      - [Integer literals](#integer-literals)
      - [Character literals](#character-literals)
      - [String literals](#string-literals)
+   - [External identifiers](#external-identifiers)
    - [Labels](#labels)
      - [Label types](#label-types)
        - [Global labels](#global-labels)
@@ -714,7 +717,31 @@ Examples with PUSH opcodes (pushes onto stack):
 
 Literals without a preceding PUSH opcode are simply embedded as data in the bytecode and can be used for inline data tables, padding, or other non-stack purposes.
 
-### Labels
+### External identifiers
+External identifiers are predefined names that serve as shorthands for system calls (traps). They are registered externally by the assembler host and expand to `TRAP` opcodes with specific trap IDs.
+
+**Usage:**
+External identifiers are used just like regular identifiers in the source code. When encountered, they emit a `TRAP` opcode followed by the registered trap ID byte.
+
+**Example:**
+If an external identifier `print` is registered with trap ID 1, then:
+```
+print
+```
+expands to:
+```
+TRAP 01
+```
+
+**Registration:**
+External identifiers are registered programmatically through the assembler's API, not in the source code itself. This allows the assembler host to define system-specific functions that can be called by name in the Forth-like source.
+
+**Resolution:**
+- If an identifier matches a registered external identifier, it emits the corresponding `TRAP` opcode
+- If no match is found, it results in a compilation error
+- External identifiers take precedence over any other identifier usage
+
+This feature enables clean, readable system calls while maintaining the flexibility of the trap mechanism.
 
 #### Label types
 ##### Global labels
