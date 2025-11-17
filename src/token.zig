@@ -34,6 +34,7 @@ pub const Tag = enum {
     invalid, // invalid token
     eof, // end of file
 
+    identifier, // general identifier
     // Literals
     number_literal, // numeric literal eg: 42, 42b, -1w
     string_literal, // string literal eg: "Hello
@@ -240,7 +241,7 @@ pub fn get_keyword(word: []const u8) ?Tag {
 
 pub fn lexeme(self: Token) ?[]const u8 {
     return switch (self.tag) {
-        .number_literal, .string_literal, .character_literal, .global_label, .local_label, .absolute_label_reference, .relative_label_reference, .absolute_padding, .relative_padding => null,
+        .number_literal, .string_literal, .character_literal, .global_label, .local_label, .absolute_label_reference, .relative_label_reference, .absolute_padding, .relative_padding, .identifier => null,
         .comment => null,
         .hash => "#",
         .exclamation => "!",
@@ -338,6 +339,7 @@ pub fn symbol(self: Token) []const u8 {
     return self.lexeme() orelse switch (self.tag) {
         .invalid => "an Invalid Token",
         .eof => "End of File",
+        .identifier => "an Identifier",
         .number_literal => "a Number Literal",
         .string_literal => "a String Literal",
         .character_literal => "a Character Literal",

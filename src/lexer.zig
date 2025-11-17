@@ -38,7 +38,7 @@ pub fn next(self: *Lexer) Token {
                     token.tag = .eof;
                 },
                 'a'...'z', 'A'...'Z', '_' => {
-                    token.tag = .invalid;
+                    token.tag = .identifier;
                     continue :state .identifier;
                 },
                 '0'...'9', '-' => {
