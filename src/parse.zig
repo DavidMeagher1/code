@@ -18,6 +18,7 @@ const Error = error{
     OffsetOutOfRange,
     RelativeJumpOutOfRange,
     TooManyExternalIdentifiers,
+    DuplicateExternalIdentifier,
 } || Allocator.Error || std.fmt.ParseIntError;
 
 const Chunk = union(enum) {
@@ -704,6 +705,8 @@ fn emitReference(self: *Assembler, output: *ArrayListUnmanaged(u8), chunk: *cons
 pub fn registerExternalIdentifier(self: *Assembler, name: []const u8, trap_id: u8) Error!void {
     if (self.external_identifiers.size >= 255) {
         return error.TooManyExternalIdentifiers;
+    } else if (self.external_identifiers.get(name)) {
+        return error.DuplicateExternalIdentifier;
     }
     try self.external_identifiers.put(self.gpa, name, trap_id);
 }
