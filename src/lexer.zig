@@ -1,3 +1,4 @@
+const std = @import("std");
 const Lexer = @This();
 const Token = @import("token.zig");
 const Location = @import("location.zig");
@@ -17,7 +18,7 @@ position: u32 = 0,
 line: u32 = 1,
 column: u32 = 1,
 
-pub fn next(self: *Lexer) ?Token {
+pub fn next(self: *Lexer) Token {
     var token = Token{
         .tag = .invalid,
         .location = Location{
@@ -58,10 +59,16 @@ pub fn next(self: *Lexer) ?Token {
                     self.position += 1;
                     self.line += 1;
                     self.column = 1;
+                    token.location.start_index = self.position;
+                    token.location.start_line = self.line;
+                    token.location.start_column = self.column;
                     continue :state .start;
                 },
                 ' ', '\t', '\r' => {
                     self.advance();
+                    token.location.start_index = self.position;
+                    token.location.start_line = self.line;
+                    token.location.start_column = self.column;
                     continue :state .start;
                 },
                 '&' => {
@@ -73,12 +80,32 @@ pub fn next(self: *Lexer) ?Token {
                     continue :state .identifier;
                 },
                 '|' => {
-                    token.tag = .bar;
-                    self.advance();
+                    if (self.peek()) |ch| {
+                        if (std.ascii.isDigit(ch) or ch == '-') {
+                            token.tag = .absolute_padding;
+                            continue :state .number;
+                        } else {
+                            token.tag = .invalid;
+                            continue :state .invalid;
+                        }
+                    } else {
+                        token.tag = .invalid;
+                        continue :state .invalid;
+                    }
                 },
                 '$' => {
-                    token.tag = .dollar;
-                    self.advance();
+                    if (self.peek()) |ch| {
+                        if (std.ascii.isDigit(ch) or ch == '-') {
+                            token.tag = .relative_padding;
+                            continue :state .number;
+                        } else {
+                            token.tag = .invalid;
+                            continue :state .invalid;
+                        }
+                    } else {
+                        token.tag = .invalid;
+                        continue :state .invalid;
+                    }
                 },
                 '(' => {
                     token.tag = .comment;
@@ -86,7 +113,11 @@ pub fn next(self: *Lexer) ?Token {
                     continue :state .comment;
                 },
                 '@' => {
-                    token.tag = .label_reference;
+                    token.tag = .absolute_label_reference;
+                    continue :state .identifier;
+                },
+                ';' => {
+                    token.tag = .relative_label_reference;
                     continue :state .identifier;
                 },
                 '#' => {
@@ -100,7 +131,7 @@ pub fn next(self: *Lexer) ?Token {
                 '!' => {
                     if (self.peek()) |ch| {
                         if (ch == '=') {
-                            token.tag = .bang_equal;
+                            token.tag = .not_equal;
                             self.advance(); // consume '!'
                             self.advance(); // consume '='
                         } else {
@@ -167,11 +198,11 @@ pub fn next(self: *Lexer) ?Token {
         .number => {
             self.advance();
             switch (self.input[self.position]) {
-                '0'...'9', 'a'...'f', 'A'...'F' => continue :state .number,
                 'b', 'w' => {
                     // suffix for size can be 'b' for byte or 'w' for word
                     self.advance();
                 },
+                '0'...'9', 'A'...'F' => continue :state .number,
                 else => {},
             }
         },
@@ -193,6 +224,7 @@ pub fn next(self: *Lexer) ?Token {
                 ' ', '\t', '\r', '\n', 0 => {
                     // Whitespace after ' is error
                     token.tag = .invalid;
+                    continue :state .invalid;
                 },
                 else => {
                     // Successfully got one character
@@ -238,14 +270,14 @@ pub fn next(self: *Lexer) ?Token {
                 },
             }
         },
-        else => unreachable,
     }
+
     self.finalize_token(&token);
     return token;
 }
 
 fn advance(self: *Lexer) void {
-    if (self.position + 1 >= self.input.len) return;
+    if (self.position + 1 > self.input.len) return;
     self.position += 1;
     self.column += 1;
 }

@@ -728,14 +728,14 @@ Local labels are defined with `&` followed by a letter or underscore, then any c
 Example: `&_local_label_090909`
 
 #### Referencing labels
-To reference a label you must use the `@` symbol followed by the label name, local or global.
+To reference a label you must use the `@` symbol for absolute references or `;` for relative references, followed by the label name, local or global.
 
-Example: `@_local_label_090909`
+Example: `@_global_label` for absolute, `;loop` for relative.
 
-This will inline the 2-byte address of that label into the bytecode if it exists.
+This will inline the 2-byte address for absolute or 1-byte signed offset for relative into the bytecode if it exists.
 
 ##### Scoping and resolution of references
-References using `@` first looks at the local scope for the label definition, allowing for shadowing of global labels. If the label cannot be found, then it searches the parent scope and so on until it either finds a matching label name or reaches the outermost scope. If no matching label is found at the global scope, a compiler error is reported to the user.
+References using `@` or `;` first looks at the local scope for the label definition, allowing for shadowing of global labels. If the label cannot be found, then it searches the parent scope and so on until it either finds a matching label name or reaches the outermost scope. If no matching label is found at the global scope, a compiler error is reported to the user.
 **Examples:**
 ```
 :main
